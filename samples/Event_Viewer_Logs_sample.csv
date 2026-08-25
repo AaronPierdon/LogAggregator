@@ -1,0 +1,40 @@
+﻿Level,Date and Time,Source,Event ID,Task Category
+Information,8/12/2026 2:03:31 PM,Microsoft-Windows-IsolatedUserMode,1,None,Secure Trustlet \??\C:\WINDOWS\system32\BioIso.exe Id 4 and Pid 58588 started with status STATUS_SUCCESS.
+Information,8/12/2026 2:03:31 PM,Microsoft-Windows-IsolatedUserMode,5,None,Secure Trustlet NULL Id 0 and Pid 0 started with status STATUS_SUCCESS.
+Information,8/12/2026 1:59:38 PM,Microsoft-Windows-Configuration-Change-Monitor,1,None,"The description for Event ID 1 from source Microsoft-Windows-Configuration-Change-Monitor cannot be found. Either the component that raises this event is not installed on your local computer or the installation is corrupted. You can install or repair the component on the local computer.
+
+If the event originated on another computer, the display information had to be saved with the event.
+
+The following information was included with the event: 
+
+EV_RenderedValue_0.00
+""C:\WINDOWS\system32\netsh.exe"" wlan show networks
+C:\Windows\System32\netsh.exe
+C:\Windows\System32\Cognizant\CogniSpot\CogniSysAgnt.exe
+C:\Windows\System32\svchost.exe
+C:\Windows\System32\services.exe
+C:\Windows\System32\wininit.exe
+
+The locale specific resource for the desired message is not present
+"
+Information,8/12/2026 1:59:38 PM,Microsoft-Windows-Configuration-Change-Monitor,1,None,"The description for Event ID 1 from source Microsoft-Windows-Configuration-Change-Monitor cannot be found. Either the component that raises this event is not installed on your local computer or the installation is corrupted. You can install or repair the component on the local computer.
+
+If the event originated on another computer, the display information had to be saved with the event.
+
+The following information was included with the event: 
+
+EV_RenderedValue_0.00
+""C:\WINDOWS\system32\netsh.exe"" wlan show interfaces
+C:\Windows\System32\netsh.exe
+C:\Windows\System32\Cognizant\CogniSpot\CogniSysAgnt.exe
+C:\Windows\System32\svchost.exe
+C:\Windows\System32\services.exe
+C:\Windows\System32\wininit.exe
+
+The locale specific resource for the desired message is not present
+"
+Information,8/12/2026 1:17:03 PM,Microsoft-Windows-IsolatedUserMode,2,None,Secure Trustlet Id 4 and Pid 58464 stopped with status STATUS_SUCCESS.
+Information,8/12/2026 1:09:33 PM,Microsoft-Windows-IsolatedUserMode,1,None,Secure Trustlet \??\C:\WINDOWS\system32\BioIso.exe Id 4 and Pid 58464 started with status STATUS_SUCCESS.
+Information,8/12/2026 1:09:33 PM,Microsoft-Windows-IsolatedUserMode,5,None,Secure Trustlet NULL Id 0 and Pid 0 started with status STATUS_SUCCESS.
+Warning,8/12/2026 1:06:10 PM,Microsoft-Windows-DNS-Client,8020,(1028),"The system failed to register host (A or AAAA) resource records (RRs) for network adapter
+with settings:

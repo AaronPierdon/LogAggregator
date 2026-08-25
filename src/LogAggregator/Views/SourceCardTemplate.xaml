@@ -1,0 +1,133 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="clr-namespace:LogAggregator.ViewModels"
+                    xmlns:models="clr-namespace:LogAggregator.Models"
+                    xmlns:conv="clr-namespace:LogAggregator.Converters">
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="../Themes/Brushes.xaml"/>
+        <ResourceDictionary Source="../Themes/Controls.xaml"/>
+        <ResourceDictionary Source="../Themes/Animations.xaml"/>
+    </ResourceDictionary.MergedDictionaries>
+
+    <conv:BoolToVisibilityConverter x:Key="Card.BoolToVis"/>
+    <conv:BoolToVisibilityConverter x:Key="Card.InverseBoolToVis" Invert="True"/>
+    <conv:HexToBrushConverter x:Key="Card.HexToBrush"/>
+    <conv:CardStateToBorderBrushConverter x:Key="Card.StateToBorder"/>
+
+    <DataTemplate x:Key="SourceCardTemplate" DataType="{x:Type vm:SourceCardViewModel}">
+        <Border Style="{StaticResource Style.Card}" Padding="12">
+            <Border.BorderBrush>
+                <Binding Path="Source.CardState" Converter="{StaticResource Card.StateToBorder}"/>
+            </Border.BorderBrush>
+            <Grid>
+                <!-- Main card content -->
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <CheckBox Grid.Column="0" Style="{StaticResource Style.DarkCheckBox}"
+                                  IsChecked="{Binding Source.IsActive}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+
+                        <!-- Color swatch + popup picker -->
+                        <ToggleButton x:Name="ColorToggle" Grid.Column="1" Width="20" Height="20" Margin="0,0,8,0"
+                                      VerticalAlignment="Center" Cursor="Hand" ToolTip="Change color">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border CornerRadius="10" BorderThickness="1.4"
+                                            BorderBrush="{StaticResource Brush.Border}"
+                                            Background="{Binding Source.DisplayColor, Converter={StaticResource Card.HexToBrush}}"/>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <Popup PlacementTarget="{Binding ElementName=ColorToggle}" IsOpen="{Binding IsChecked, ElementName=ColorToggle}"
+                               StaysOpen="False" Placement="Bottom" AllowsTransparency="True">
+                            <Border Background="{StaticResource Brush.SurfaceRaised}" BorderBrush="{StaticResource Brush.Border}"
+                                    BorderThickness="1" CornerRadius="6" Padding="8">
+                                <ItemsControl ItemsSource="{Binding PresetColors}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Width="140"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Width="22" Height="22" Margin="3" Cursor="Hand"
+                                                    Command="{Binding DataContext.SetColorCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Template>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Border CornerRadius="11"
+                                                                Background="{Binding Converter={StaticResource Card.HexToBrush}}"/>
+                                                    </ControlTemplate>
+                                                </Button.Template>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+                        </Popup>
+
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Source.Name}" Style="{StaticResource Style.CardTitle}"/>
+                            <TextBlock Style="{StaticResource Style.CardSubtext}">
+                                <TextBlock.Text>
+                                    <MultiBinding StringFormat="{}{0} · {1} file(s) · {2:N0} block(s)">
+                                        <Binding Path="Source.Type"/>
+                                        <Binding Path="Source.FilePaths.Count"/>
+                                        <Binding Path="Source.ParsedBlockCount"/>
+                                    </MultiBinding>
+                                </TextBlock.Text>
+                            </TextBlock>
+                        </StackPanel>
+
+                        <Button Grid.Column="3" Style="{StaticResource Style.IconButton}"
+                                Command="{Binding SettingsCommand}" ToolTip="Edit source">
+                            <Path Width="14" Height="14" Stretch="Uniform" Fill="{StaticResource Brush.TextSecondary}"
+                                  Data="M9,2 L11,2 L11.4,4.1 C12.1,4.3 12.8,4.7 13.4,5.1 L15.3,4.2 L16.3,6 L14.7,7.3
+                                        C14.8,7.9 14.8,8.5 14.7,9.1 L16.3,10.4 L15.3,12.2 L13.4,11.3
+                                        C12.8,11.7 12.1,12.1 11.4,12.3 L11,14.4 L9,14.4 L8.6,12.3
+                                        C7.9,12.1 7.2,11.7 6.6,11.3 L4.7,12.2 L3.7,10.4 L5.3,9.1
+                                        C5.2,8.5 5.2,7.9 5.3,7.3 L3.7,6 L4.7,4.2 L6.6,5.1
+                                        C7.2,4.7 7.9,4.3 8.6,4.1 Z M10,6.2 A2.3,2.3 0 1 0 10,10.8 A2.3,2.3 0 1 0 10,6.2 Z"/>
+                        </Button>
+                    </Grid>
+
+                    <Button Content="Import files..." Style="{StaticResource Style.SecondaryButton}"
+                            Command="{Binding ImportCommand}" Margin="0,10,0,0" HorizontalAlignment="Stretch" FontSize="12"/>
+                </StackPanel>
+
+                <!-- Syncing overlay -->
+                <Border Background="#CC161920" CornerRadius="8"
+                        Visibility="{Binding Source.IsSyncing, Converter={StaticResource Card.BoolToVis}}"
+                        Cursor="Hand">
+                    <Border.InputBindings>
+                        <MouseBinding MouseAction="LeftClick" Command="{Binding CancelSyncCommand}"/>
+                    </Border.InputBindings>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Path x:Name="Spinner" Width="26" Height="26" Stretch="Uniform"
+                              Data="M13,2 A11,11 0 1 1 4,6" Stroke="{StaticResource Brush.AccentGreen}"
+                              StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              RenderTransformOrigin="0.5,0.5">
+                            <Path.RenderTransform>
+                                <RotateTransform/>
+                            </Path.RenderTransform>
+                            <Path.Triggers>
+                                <EventTrigger RoutedEvent="Loaded">
+                                    <BeginStoryboard Storyboard="{StaticResource Storyboard.SpinForever}"/>
+                                </EventTrigger>
+                            </Path.Triggers>
+                        </Path>
+                        <TextBlock Text="Syncing… click to cancel" Foreground="{StaticResource Brush.TextSecondary}"
+                                   FontSize="10.5" Margin="0,8,0,0" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+    </DataTemplate>
+
+</ResourceDictionary>

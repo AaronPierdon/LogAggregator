@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>LogAggregator</RootNamespace>
+    <AssemblyName>LogAggregator</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!-- Self-contained single-file publish settings.
+         Build with: dotnet publish -c Release -r win-x64 -p:SelfContained=true
+         (see PUBLISH.md for the full command and options) -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <SelfContainedPublishOverridesGlobalWebProxy>true</SelfContainedPublishOverridesGlobalWebProxy>
+
+    <!-- Keep this off during normal Debug/Release F5 builds - it only matters for `dotnet publish` -->
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="app.manifest" CopyToOutputDirectory="PreserveNewest" Condition="Exists('app.manifest')" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,321 @@
+<Window x:Class="LogAggregator.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:vm="clr-namespace:LogAggregator.ViewModels"
+        xmlns:conv="clr-namespace:LogAggregator.Converters"
+        xmlns:models="clr-namespace:LogAggregator.Models"
+        Style="{StaticResource Style.BaseWindow}"
+        Title="Log Aggregator"
+        Width="1440" Height="880" MinWidth="1040" MinHeight="620"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None" AllowsTransparency="False"
+        Background="{StaticResource Brush.Background}">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0"
+                             CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="SourceCardTemplate.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+            <conv:BoolToVisibilityConverter x:Key="InverseBoolToVis" Invert="True"/>
+            <conv:InverseBoolConverter x:Key="InverseBool"/>
+            <conv:HexToBrushConverter x:Key="HexToBrush"/>
+            <conv:CardStateToBorderBrushConverter x:Key="CardStateToBorderBrush"/>
+            <conv:CountToSummaryConverter x:Key="CountToSummary"/>
+            <conv:CountToVisibilityConverter x:Key="CountToVis"/>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============================= CUSTOM TITLE BAR ============================= -->
+        <Border Grid.Row="0" Height="34" Background="{StaticResource Brush.SurfaceRaised}"
+                BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1"
+                MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                    <Border Width="10" Height="10" CornerRadius="5" Background="{StaticResource Brush.AccentGradient}" Margin="0,0,8,0"/>
+                    <TextBlock Text="Log Aggregator" Foreground="{StaticResource Brush.TextSecondary}" FontSize="12"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button x:Name="SettingsButton" Style="{StaticResource Style.CaptionButton}" FontFamily="Segoe MDL2 Assets"
+                            Content="&#xE713;" ToolTip="Settings" Click="SettingsButton_Click"/>
+                    <Button Style="{StaticResource Style.CaptionButton}" Content="&#xE921;" Click="Minimize_Click" ToolTip="Minimize"/>
+                    <Button Style="{StaticResource Style.CaptionButton}" Content="&#xE922;" Click="MaximizeRestore_Click" ToolTip="Maximize"/>
+                    <Button Style="{StaticResource Style.CaptionCloseButton}" Content="&#xE8BB;" Click="Close_Click" ToolTip="Close"/>
+                </StackPanel>
+
+                <Popup x:Name="SettingsPopup" PlacementTarget="{Binding ElementName=SettingsButton}" Placement="Bottom"
+                       StaysOpen="False" AllowsTransparency="True">
+                    <Border Background="{StaticResource Brush.SurfaceRaised}" BorderBrush="{StaticResource Brush.Border}"
+                            BorderThickness="1" CornerRadius="6" Padding="14" Width="240">
+                        <StackPanel>
+                            <TextBlock Text="INTERFACE" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,8"/>
+                            <CheckBox Content="Show drag &amp; drop quick-add area" Style="{StaticResource Style.DarkCheckBox}"
+                                      IsChecked="{Binding ShowDropZone}"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+            </Grid>
+        </Border>
+
+        <!-- ============================= BODY ============================= -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ============================= LEFT PANEL ============================= -->
+            <Border x:Name="LeftPanelBorder" Grid.Column="0" Width="292"
+                    Background="{StaticResource Brush.SurfaceBase}"
+                    BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,1,0">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsPanelCollapsed}" Value="True">
+                                <DataTrigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Width" To="60" Duration="0:0:0.25">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </DataTrigger.EnterActions>
+                                <DataTrigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Width" To="292" Duration="0:0:0.25">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </DataTrigger.ExitActions>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Header -->
+                    <Grid Grid.Row="0" Margin="12,12,12,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0" Style="{StaticResource Style.IconButton}"
+                                Command="{Binding TogglePanelCommand}" ToolTip="Collapse / expand">
+                            <Path Width="14" Height="14" Stretch="Uniform" Fill="{StaticResource Brush.TextSecondary}"
+                                  Data="M3,3 L3,17 M7,3 L17,3 L17,17 L7,17 M9,7 L14,10 L9,13 Z"/>
+                        </Button>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                                    Visibility="{Binding IsPanelCollapsed, Converter={StaticResource InverseBoolToVis}}">
+                            <CheckBox Style="{StaticResource Style.DarkCheckBox}" Margin="0,0,10,0"
+                                      VerticalAlignment="Center" ToolTip="Add / remove all sources"
+                                      IsChecked="{Binding AllActive}" IsThreeState="True"/>
+                            <Button Content="+ Add Source" Style="{StaticResource Style.PrimaryButton}"
+                                    Command="{Binding AddSourceCommand}" FontSize="12"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Card list (expanded) -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding IsPanelCollapsed, Converter={StaticResource InverseBoolToVis}}">
+                        <ItemsControl ItemsSource="{Binding Sources}" Margin="12,0,12,12">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource SourceCardTemplate}"
+                                                    Margin="0,0,0,10"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- Icon rail (collapsed) -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding IsPanelCollapsed, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl ItemsSource="{Binding Sources}" Margin="0,4,0,12" HorizontalAlignment="Center">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Width="34" Height="34" CornerRadius="17" Margin="0,4"
+                                            BorderThickness="2" BorderBrush="{Binding Source.CardState, Converter={StaticResource CardStateToBorderBrush}}"
+                                            Background="{Binding Source.DisplayColor, Converter={StaticResource HexToBrush}}"
+                                            ToolTip="{Binding Source.Name}" Cursor="Hand">
+                                        <Border.InputBindings>
+                                            <MouseBinding MouseAction="LeftClick"
+                                                          Command="{Binding DataContext.TogglePanelCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                        </Border.InputBindings>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- ============================= MAIN CONTENT ============================= -->
+            <Grid Grid.Column="1" Background="{StaticResource Brush.Background}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Quick-add drop zone -->
+                <Border Grid.Row="0" x:Name="DropZoneBorder" Style="{StaticResource Style.DropZoneBorder}"
+                        Margin="16,16,16,0" Height="110"
+                        Visibility="{Binding ShowDropZone, Converter={StaticResource BoolToVis}}"
+                        AllowDrop="True" Drop="DropZone_Drop" DragEnter="DropZone_DragEnter" DragLeave="DropZone_DragLeave">
+                    <Grid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Border Width="40" Height="40" CornerRadius="8" BorderThickness="2" BorderBrush="{StaticResource Brush.AccentGreen}"
+                                    Background="Transparent" HorizontalAlignment="Center">
+                                <Path Width="18" Height="18" Stretch="Uniform" Fill="{StaticResource Brush.AccentGreen}"
+                                      Data="M9,0 L11,0 L11,9 L20,9 L20,11 L11,11 L11,20 L9,20 L9,11 L0,11 L0,9 L9,9 Z"/>
+                            </Border>
+                            <TextBlock Text="Drag files or a .zip here to auto-add a source" Foreground="{StaticResource Brush.TextSecondary}"
+                                       FontSize="12.5" Margin="0,10,0,0" HorizontalAlignment="Center">
+                                <TextBlock.ToolTip>
+                                    <ToolTip Content="Drop one or more files (or a .zip) of the same log type here. Log Aggregator will detect the file type and timestamp pattern automatically and add a new source - no wizard needed. If it can't detect confidently, use &quot;+ Add Source&quot; instead so you can review the detection."
+                                             MaxWidth="320"/>
+                                </TextBlock.ToolTip>
+                            </TextBlock>
+                        </StackPanel>
+
+                        <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,6,0"
+                                Style="{StaticResource Style.IconButton}" Width="24" Height="24"
+                                Command="{Binding HideDropZoneCommand}" ToolTip="Hide this area (Settings &gt; Interface to bring it back)">
+                            <Path Width="10" Height="2" Fill="{StaticResource Brush.TextSecondary}" Stretch="Fill" Data="M0,0 L10,0 L10,2 L0,2 Z"/>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <!-- Filter bar -->
+                <Border Grid.Row="1" Background="{StaticResource Brush.SurfaceRaised}"
+                        BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1" Padding="16,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                            <TextBlock Text="OR (comma-separated)" Style="{StaticResource Style.SectionHeader}" Margin="2,0,0,4"/>
+                            <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding OrFilterText, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Margin="0,0,10,0">
+                            <TextBlock Text="AND (comma-separated)" Style="{StaticResource Style.SectionHeader}" Margin="2,0,0,4"/>
+                            <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding AndFilterText, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Margin="0,0,10,0">
+                            <TextBlock Text="EXCLUDE (comma-separated)" Style="{StaticResource Style.SectionHeader}" Margin="2,0,0,4"/>
+                            <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding ExclusionFilterText, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Bottom">
+                            <Button Content="Apply Filters" Style="{StaticResource Style.PrimaryButton}"
+                                    Command="{Binding ApplyFiltersCommand}" Margin="0,0,8,0"
+                                    ToolTip="Apply Filters is disabled while any source is syncing."/>
+                            <Button Content="Clear" Style="{StaticResource Style.SecondaryButton}"
+                                    Command="{Binding ClearFiltersCommand}" Margin="0,0,8,0"/>
+                            <Button Content="Export..." Style="{StaticResource Style.SecondaryButton}"
+                                    Command="{Binding ExportCommand}"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- DataGrid -->
+                <DataGrid Grid.Row="2" Margin="16" ItemsSource="{Binding BlocksView}"
+                          AutoGenerateColumns="False" IsReadOnly="True" CanUserSortColumns="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Source" Binding="{Binding SourceName}" Width="150"
+                                            SortMemberPath="SourceName" CanUserSort="True"/>
+                        <DataGridTextColumn Header="Universal Timestamp" Binding="{Binding UniversalTimestamp, StringFormat='yyyy-MM-dd HH:mm:ss.fff'}"
+                                            Width="200" SortMemberPath="UniversalTimestamp" CanUserSort="True"/>
+                        <DataGridTextColumn Header="Original Timestamp" Binding="{Binding OriginalTimestamp}"
+                                            Width="200" SortMemberPath="OriginalTimestamp" CanUserSort="True"/>
+                        <DataGridTemplateColumn Header="Message" Width="*" SortMemberPath="FullText" CanUserSort="True">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBox Text="{Binding FullText, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="True"
+                                             BorderThickness="0" Background="Transparent" Foreground="{StaticResource Brush.TextPrimary}"
+                                             TextWrapping="Wrap" FontSize="12.5" Padding="0" VerticalAlignment="Center"
+                                             VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled">
+                                        <TextBox.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Copy" Command="{x:Static ApplicationCommands.Copy}"/>
+                                                <MenuItem Header="Copy Full Message" Click="CopyFullMessage_Click"/>
+                                            </ContextMenu>
+                                        </TextBox.ContextMenu>
+                                    </TextBox>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- Status bar -->
+                <Border Grid.Row="3" Background="{StaticResource Brush.SurfaceRaised}"
+                        BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0" Padding="16,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal">
+                            <TextBlock Text="{Binding AllBlocks.Count, Converter={StaticResource CountToSummary}}"
+                                       Foreground="{StaticResource Brush.TextSecondary}" FontSize="12"/>
+                            <TextBlock Text=" total loaded" Foreground="{StaticResource Brush.TextMuted}" FontSize="12"/>
+                            <TextBlock Text="  ·  Filters active" Foreground="{StaticResource Brush.AccentGreen}" FontSize="12" Margin="10,0,0,0"
+                                       Visibility="{Binding FiltersActive, Converter={StaticResource BoolToVis}}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                    Visibility="{Binding Warnings.Count, Converter={StaticResource CountToVis}}">
+                            <TextBlock Text="{Binding Warnings.Count}" Foreground="{StaticResource Brush.Warning}" FontSize="12" Margin="0,0,4,0"/>
+                            <TextBlock Text="parse warning(s)" Foreground="{StaticResource Brush.Warning}" FontSize="12"
+                                       ToolTip="Warnings are logged when a timestamp couldn't be parsed - the row is still kept."/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- Bottom toast -->
+        <Border Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="0,0,0,0"
+                Background="{StaticResource Brush.SurfaceHover}" BorderBrush="{StaticResource Brush.AccentBlue}"
+                BorderThickness="0,1,0,0" Padding="20,12"
+                Visibility="{Binding ToastVisible, Converter={StaticResource BoolToVis}}">
+            <TextBlock Text="{Binding ToastMessage}" Foreground="{StaticResource Brush.TextPrimary}" FontSize="13" TextWrapping="Wrap"/>
+        </Border>
+    </Grid>
+</Window>
