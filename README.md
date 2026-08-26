@@ -63,19 +63,71 @@ src/LogAggregator/
                                custom DataGrid template with animated row selection
   Models/                    - LogSource, LogBlock, TimestampProfile, FileType, AppConfig
   Services/
+    LogDatabase.cs           - SQLite storage: schema, batched writes, filtered/sorted/
+                               paged queries (see "SQL backend" below)
     TimestampDetector.cs     - the adaptive timestamp detection engine (see below)
+    FileTypeDetector.cs      - auto-detects CSV/Tab/FlatText from real file content
     DelimitedLineParser.cs   - RFC4180 CSV reader + simple tab/line splitter
-    IngestionService.cs      - adaptive buffered/streaming ingestion, block detection,
-                               parallel per-file parsing, cancellation
+    FileDropHelper.cs        - shared drag-and-drop/zip-expansion logic
+    IngestionService.cs      - batched streaming ingestion straight into SQLite, block
+                               detection, parallel per-file parsing, cancellation
     ConfigService.cs         - sources.config.json load/save
-    FilterService.cs         - the three-box OR/AND/Exclusion filter logic
-    ExportService.cs         - pipe-delimited flat-text export
+    FilterService.cs         - OR/AND/Exclusion term parsing (evaluation is now SQL, in LogDatabase)
+    ExportService.cs         - streams a filtered/sorted SQL query to a pipe-delimited file
   ViewModels/                - MainViewModel, SourceCardViewModel, WizardViewModel
   Views/                     - MainWindow, WizardWindow, SourceCardTemplate
   Converters/                - value converters (color tinting, visibility, etc.)
 samples/                     - small excerpts of the 5 sample logs you uploaded, used to
                                design and sanity-check the timestamp detection logic
 ```
+
+## SQL backend (v3 - fixes the 36 million row memory problem)
+
+Rows are no longer held in memory. `Services/LogDatabase.cs` stores every parsed log block in
+a local SQLite database (`logaggregator.db`, next to the exe, via `Microsoft.Data.Sqlite` +
+`Dapper`) instead of a C# `ObservableCollection`. This was a real problem, not a hypothetical
+one: 36 million `LogBlock` objects held live in memory (each with a `List<string> Lines` and a
+duplicated `FullText`/`SourceName`/`SourceColor` per row) is easily 6-10+ GB of overhead alone -
+that's what the previous tool almost certainly ran into.
+
+What changed, concretely:
+
+- **Ingestion writes straight to SQLite in small batches** (2000 rows at a time) as it parses,
+  rather than building a big in-memory list and returning it at the end. Memory during
+  ingestion is bounded by the batch size, not by file size or row count.
+- **The DataGrid is a sliding window**, not a full in-memory collection. `MainViewModel`
+  queries a page (2000 rows) at a time from SQLite, with the OR/AND/EXCLUDE filter and column
+  sort both translated into a parameterized SQL `WHERE`/`ORDER BY` (see
+  `LogDatabase.BuildFilterSql` - it implements the exact same
+  `(OR_match || AND_match) && !Exclusion_match` semantics as before, just as SQL instead of a
+  C# predicate). Scrolling near the bottom of what's loaded triggers the next page; the window
+  is capped at 50,000 loaded rows and trims from the front once exceeded, so memory stays
+  bounded no matter how far you scroll.
+- **Export streams directly from SQLite** via an unbuffered query - exporting doesn't require
+  holding the exported rows in memory either.
+- **Data persists across restarts.** Since it's no longer being kept just in RAM, the app no
+  longer automatically re-parses every source's files on every startup (that would mean
+  re-parsing 36 million lines every time you open the app, which defeats the point) - it reads
+  the counts already sitting in the database. Explicit imports/edits still trigger a full
+  re-sync for that source (delete + re-parse), since diffing "what changed" is out of scope for
+  this pass.
+
+**A real trade-off, not hidden**: this "sliding window" model loads more rows going *forward*
+as you scroll down, but there's no symmetric backward loading - if you jump to the end and want
+to go back up past what's still loaded, use the "Jump to Start" button rather than expecting the
+scrollbar to represent your true position across a multi-million-row filtered result. A true
+bidirectional virtualizing data source (one a WPF `DataGrid` could page against transparently in
+both directions) is real additional complexity I didn't think was worth taking on blind, without
+being able to compile-test it - flagged as a natural v2 if the one-directional model ever feels
+limiting in practice, rather than quietly shipped as if it were seamless.
+
+**Why SQLite specifically, and why it's good Dapper practice**: no local server or service to
+install - it's a single file plus a NuGet package. Dapper itself is backend-agnostic (it just
+executes SQL against whatever `IDbConnection` you hand it), so everything here - the query
+writing, the parameterization, the `DynamicParameters` usage - transfers directly to your
+personal project regardless of what it ends up running against. The only thing that's
+SQLite-specific is the SQL dialect (no stored procs, looser typing than T-SQL/Postgres) - if you
+want T-SQL or Postgres reps specifically later, that's a separate, later exercise.
 
 ## How adaptive timestamp detection works (v2 - file type & pattern both automatic now)
 

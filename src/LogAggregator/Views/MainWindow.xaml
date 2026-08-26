@@ -5,6 +5,7 @@
         xmlns:vm="clr-namespace:LogAggregator.ViewModels"
         xmlns:conv="clr-namespace:LogAggregator.Converters"
         xmlns:models="clr-namespace:LogAggregator.Models"
+        xmlns:views="clr-namespace:LogAggregator.Views"
         Style="{StaticResource Style.BaseWindow}"
         Title="Log Aggregator"
         Width="1440" Height="880" MinWidth="1040" MinHeight="620"
@@ -255,16 +256,17 @@
                 </Border>
 
                 <!-- DataGrid -->
-                <DataGrid Grid.Row="2" Margin="16" ItemsSource="{Binding BlocksView}"
-                          AutoGenerateColumns="False" IsReadOnly="True" CanUserSortColumns="True">
+                <DataGrid Grid.Row="2" x:Name="LogGrid" Margin="16" ItemsSource="{Binding DisplayedBlocks}"
+                          AutoGenerateColumns="False" IsReadOnly="True" CanUserSortColumns="True"
+                          Sorting="LogGrid_Sorting">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Source" Binding="{Binding SourceName}" Width="150"
-                                            SortMemberPath="SourceName" CanUserSort="True"/>
+                                            views:DataGridColumnExtensions.SortColumnKey="Source" CanUserSort="True"/>
                         <DataGridTextColumn Header="Universal Timestamp" Binding="{Binding UniversalTimestamp, StringFormat='yyyy-MM-dd HH:mm:ss.fff'}"
-                                            Width="200" SortMemberPath="UniversalTimestamp" CanUserSort="True"/>
+                                            Width="200" views:DataGridColumnExtensions.SortColumnKey="UniversalTimestamp" CanUserSort="True"/>
                         <DataGridTextColumn Header="Original Timestamp" Binding="{Binding OriginalTimestamp}"
-                                            Width="200" SortMemberPath="OriginalTimestamp" CanUserSort="True"/>
-                        <DataGridTemplateColumn Header="Message" Width="*" SortMemberPath="FullText" CanUserSort="True">
+                                            Width="200" views:DataGridColumnExtensions.SortColumnKey="OriginalTimestamp" CanUserSort="True"/>
+                        <DataGridTemplateColumn Header="Message" Width="*" views:DataGridColumnExtensions.SortColumnKey="Message" CanUserSort="True">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBox Text="{Binding FullText, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="True"
@@ -291,15 +293,34 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
+
                         <StackPanel Grid.Column="0" Orientation="Horizontal">
-                            <TextBlock Text="{Binding AllBlocks.Count, Converter={StaticResource CountToSummary}}"
-                                       Foreground="{StaticResource Brush.TextSecondary}" FontSize="12"/>
-                            <TextBlock Text=" total loaded" Foreground="{StaticResource Brush.TextMuted}" FontSize="12"/>
+                            <TextBlock Foreground="{StaticResource Brush.TextSecondary}" FontSize="12">
+                                <TextBlock.Text>
+                                    <MultiBinding StringFormat="Showing {0:N0} of {1:N0} matching rows  ·  {2:N0} total across all sources">
+                                        <Binding Path="DisplayedBlocks.Count"/>
+                                        <Binding Path="TotalMatchingCount"/>
+                                        <Binding Path="GrandTotalCount"/>
+                                    </MultiBinding>
+                                </TextBlock.Text>
+                            </TextBlock>
                             <TextBlock Text="  ·  Filters active" Foreground="{StaticResource Brush.AccentGreen}" FontSize="12" Margin="10,0,0,0"
                                        Visibility="{Binding FiltersActive, Converter={StaticResource BoolToVis}}"/>
+                            <TextBlock Text="  ·  Loading more…" Foreground="{StaticResource Brush.AccentBlue}" FontSize="12" Margin="10,0,0,0"
+                                       Visibility="{Binding IsLoadingMore, Converter={StaticResource BoolToVis}}"/>
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,16,0">
+                            <Button Content="Jump to Start" Style="{StaticResource Style.SecondaryButton}" FontSize="11" Padding="8,3"
+                                    Command="{Binding JumpToStartCommand}" Margin="0,0,6,0"
+                                    ToolTip="Scrolling loads more rows going forward only - use these to jump directly to either end of the current result set."/>
+                            <Button Content="Jump to End" Style="{StaticResource Style.SecondaryButton}" FontSize="11" Padding="8,3"
+                                    Command="{Binding JumpToEndCommand}"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal"
                                     Visibility="{Binding Warnings.Count, Converter={StaticResource CountToVis}}">
                             <TextBlock Text="{Binding Warnings.Count}" Foreground="{StaticResource Brush.Warning}" FontSize="12" Margin="0,0,4,0"/>
                             <TextBlock Text="parse warning(s)" Foreground="{StaticResource Brush.Warning}" FontSize="12"

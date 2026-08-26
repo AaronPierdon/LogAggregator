@@ -1,39 +1,50 @@
 using System;
-using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
-using LogAggregator.Models;
+using System.Threading.Tasks;
 
 namespace LogAggregator.Services;
 
 /// <summary>
-/// Writes the current (post-filter, if active) view to a pipe-delimited flat text file.
-/// Multi-line blocks get one row per line: the first row carries all columns, continuation
-/// rows leave timestamp/source blank and indent the message. A blank line separates blocks.
+/// Writes the current (post-filter) view to a pipe-delimited flat text file, reading straight
+/// from SQLite via an unbuffered query. Runs on a background thread and never materializes the
+/// full result set in memory - correct even for tens of millions of exported rows.
 /// </summary>
 public static class ExportService
 {
-    public static async Task ExportAsync(string path, IEnumerable<LogBlock> blocks)
+    public static Task ExportAsync(
+        string path, LogDatabase database,
+        IReadOnlyCollection<string> activeSourceIds,
+        IReadOnlyList<string> orTerms, IReadOnlyList<string> andTerms, IReadOnlyList<string> exclusionTerms,
+        SortColumn sortColumn, bool descending,
+        IProgress<long>? progress = null)
     {
-        using var writer = new StreamWriter(path, append: false);
-
-        await writer.WriteLineAsync("Universal Timestamp | Original Timestamp | Source | Log Message").ConfigureAwait(false);
-
-        foreach (var block in blocks)
+        return Task.Run(() =>
         {
-            var tsText = block.TimestampParseFailed
-                ? "(unparsed)"
-                : block.UniversalTimestamp.ToString("yyyy-MM-dd HH:mm:ss.fffffff");
+            using var writer = new StreamWriter(path, append: false);
+            writer.WriteLine("Universal Timestamp | Original Timestamp | Source | Log Message");
 
-            var firstLine = block.Lines.Count > 0 ? block.Lines[0] : block.FullText;
-            await writer.WriteLineAsync($"{tsText} | {block.OriginalTimestamp} | {block.SourceName} | {firstLine}").ConfigureAwait(false);
-
-            for (int i = 1; i < block.Lines.Count; i++)
+            long count = 0;
+            foreach (var block in database.QueryAllMatchingUnbuffered(activeSourceIds, orTerms, andTerms, exclusionTerms, sortColumn, descending))
             {
-                await writer.WriteLineAsync($" | | |     {block.Lines[i]}").ConfigureAwait(false);
+                var tsText = block.TimestampParseFailed
+                    ? "(unparsed)"
+                    : block.UniversalTimestamp.ToString("yyyy-MM-dd HH:mm:ss.fffffff");
+
+                var lines = block.SplitLines();
+                var firstLine = lines.Length > 0 ? lines[0] : block.FullText;
+                writer.WriteLine($"{tsText} | {block.OriginalTimestamp} | {block.SourceName} | {firstLine}");
+
+                for (int i = 1; i < lines.Length; i++)
+                    writer.WriteLine($" | | |     {lines[i]}");
+
+                writer.WriteLine();
+
+                count++;
+                if (count % 5000 == 0) progress?.Report(count);
             }
 
-            await writer.WriteLineAsync().ConfigureAwait(false);
-        }
+            progress?.Report(count);
+        });
     }
 }

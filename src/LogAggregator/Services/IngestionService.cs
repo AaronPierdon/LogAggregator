@@ -10,22 +10,40 @@ namespace LogAggregator.Services;
 
 /// <summary>
 /// Reads all files belonging to a LogSource, detects log-entry (block) boundaries, normalizes
-/// timestamps, and returns a single sorted batch of LogBlocks. Every source syncs on its own
-/// Task/CancellationToken; within a source, files are parsed in parallel.
+/// timestamps, and writes rows into SQLite in small batches as it goes. This is the core fix
+/// for the "36 million lines eats all my RAM" problem: at no point does this class hold more
+/// than one batch (~2000 rows) of LogBlocks in memory, regardless of how large the source file
+/// is or how many rows it ultimately produces. Every source syncs on its own Task/
+/// CancellationToken; within a source, files are parsed in parallel (writes are serialized
+/// inside LogDatabase, since SQLite allows one writer at a time - see LogDatabase.cs).
 /// </summary>
 public class IngestionService
 {
     /// <summary>Files at or above this size stream line-by-line (StreamReader) instead of being
-    /// fully buffered (File.ReadAllLines), to cap RAM use. Named constant - easy to tune.</summary>
+    /// fully buffered (File.ReadAllLines) for the *read* side. Named constant - easy to tune.</summary>
     public const long StreamingThresholdBytes = 10L * 1024 * 1024; // 10 MB
+
+    /// <summary>How many parsed blocks accumulate in memory before being flushed to SQLite as
+    /// one batch/transaction. This - not file size - is what actually bounds ingestion memory.</summary>
+    private const int WriteBatchSize = 2000;
 
     /// <summary>How often (in records/lines) cancellation is checked - frequent enough to cancel
     /// promptly, infrequent enough not to add meaningful overhead.</summary>
     private const int CancellationCheckInterval = 1000;
 
+    private readonly LogDatabase _database;
+
+    public IngestionService(LogDatabase database)
+    {
+        _database = database;
+    }
+
     public async Task<SourceIngestionResult> IngestSourceAsync(LogSource source, CancellationToken ct)
     {
-        var allBlocks = new List<LogBlock>();
+        // Re-sync replaces this source's previous rows outright, rather than trying to diff
+        // which files/lines changed - simple and correct, at the cost of a full re-parse.
+        _database.DeleteBlocksForSource(source.Id);
+
         var allWarnings = new List<IngestionWarning>();
         var sync = new object();
 
@@ -40,18 +58,14 @@ public class IngestionService
             var fileResult = await IngestFileAsync(path, source, token).ConfigureAwait(false);
             lock (sync)
             {
-                allBlocks.AddRange(fileResult.Blocks);
                 allWarnings.AddRange(fileResult.Warnings);
             }
         }).ConfigureAwait(false);
 
         ct.ThrowIfCancellationRequested();
 
-        // Single sorted batch - the caller inserts this all at once rather than re-sorting the
-        // display collection per block.
-        allBlocks.Sort((a, b) => a.UniversalTimestamp.CompareTo(b.UniversalTimestamp));
-
-        return new SourceIngestionResult { Blocks = allBlocks, Warnings = allWarnings };
+        var totalCount = _database.CountForSource(source.Id);
+        return new SourceIngestionResult { Warnings = allWarnings, TotalCount = totalCount };
     }
 
     private Task<FileIngestionResult> IngestFileAsync(string path, LogSource source, CancellationToken ct)
@@ -70,13 +84,23 @@ public class IngestionService
         }, ct);
     }
 
+    private void FlushBatch(List<LogBlock> pendingBatch)
+    {
+        if (pendingBatch.Count == 0) return;
+        _database.InsertBatch(pendingBatch);
+        pendingBatch.Clear();
+    }
+
     // ===================================================================
     // FlatText: a line starting with a matching timestamp begins a new block;
     // everything else is a continuation of the current block.
     // ===================================================================
-    private static FileIngestionResult IngestFlatText(string path, LogSource source, bool streaming, CancellationToken ct)
+    private FileIngestionResult IngestFlatText(string path, LogSource source, bool streaming, CancellationToken ct)
     {
         var result = new FileIngestionResult();
+        var pendingBatch = new List<LogBlock>(WriteBatchSize);
+        long insertedCount = 0;
+
         List<string>? currentLines = null;
         DateTime currentUtc = DateTime.MinValue;
         string currentOriginal = string.Empty;
@@ -86,19 +110,21 @@ public class IngestionService
         void Flush()
         {
             if (currentLines is null) return;
-            result.Blocks.Add(new LogBlock
+            pendingBatch.Add(new LogBlock
             {
                 UniversalTimestamp = currentUtc,
                 OriginalTimestamp = currentOriginal,
                 SourceId = source.Id,
                 SourceName = source.Name,
                 SourceColor = source.DisplayColor,
-                Lines = currentLines,
-                FullText = string.Join(Environment.NewLine, currentLines),
+                FullText = string.Join('\n', currentLines),
                 TimestampParseFailed = currentFailed,
                 SourceFilePath = path
             });
+            insertedCount++;
             currentLines = null;
+
+            if (pendingBatch.Count >= WriteBatchSize) FlushBatch(pendingBatch);
         }
 
         void ProcessLine(string line)
@@ -148,8 +174,9 @@ public class IngestionService
         }
 
         Flush();
+        FlushBatch(pendingBatch);
 
-        if (result.Blocks.Count == 0 && lineIndex > 0)
+        if (lineIndex > 0 && insertedCount == 0)
         {
             result.Warnings.Add(new IngestionWarning
             {
@@ -166,14 +193,16 @@ public class IngestionService
     // CSV: real RFC4180 records (embedded commas/newlines inside quotes are data, not new
     // records or blocks). Each record is its own block.
     // ===================================================================
-    private static FileIngestionResult IngestDelimited(string path, LogSource source, bool streaming, CancellationToken ct, char delimiter)
+    private FileIngestionResult IngestDelimited(string path, LogSource source, bool streaming, CancellationToken ct, char delimiter)
     {
         var result = new FileIngestionResult();
+        var pendingBatch = new List<LogBlock>(WriteBatchSize);
+        long insertedCount = 0;
         TextReader reader = streaming ? new StreamReader(path) : new StringReader(File.ReadAllText(path));
+        long recordIndex = -1;
 
         try
         {
-            long recordIndex = -1;
             string[]? fields;
             while ((fields = DelimitedLineParser.ReadCsvRecord(reader, delimiter)) != null)
             {
@@ -201,27 +230,38 @@ public class IngestionService
                 }
 
                 var message = string.Join(" | ", fields);
-                var lines = message.Contains('\n')
-                    ? message.Split('\n').Select(l => l.TrimEnd('\r')).ToList()
-                    : new List<string> { message };
 
-                result.Blocks.Add(new LogBlock
+                pendingBatch.Add(new LogBlock
                 {
                     UniversalTimestamp = utc,
                     OriginalTimestamp = originalText,
                     SourceId = source.Id,
                     SourceName = source.Name,
                     SourceColor = source.DisplayColor,
-                    Lines = lines,
                     FullText = message,
                     TimestampParseFailed = !parsedOk,
                     SourceFilePath = path
                 });
+                insertedCount++;
+
+                if (pendingBatch.Count >= WriteBatchSize) FlushBatch(pendingBatch);
             }
         }
         finally
         {
             reader.Dispose();
+        }
+
+        FlushBatch(pendingBatch);
+
+        if (recordIndex >= 0 && insertedCount == 0)
+        {
+            result.Warnings.Add(new IngestionWarning
+            {
+                FilePath = path,
+                LineNumber = 0,
+                Reason = "No record in this file produced a parseable timestamp - no blocks were created."
+            });
         }
 
         return result;
@@ -231,9 +271,12 @@ public class IngestionService
     // Tab-delimited: a physical line containing at least one tab is treated as a record; a
     // line with no tabs is a continuation of the previous record (wrapped text).
     // ===================================================================
-    private static FileIngestionResult IngestTabDelimited(string path, LogSource source, bool streaming, CancellationToken ct)
+    private FileIngestionResult IngestTabDelimited(string path, LogSource source, bool streaming, CancellationToken ct)
     {
         var result = new FileIngestionResult();
+        var pendingBatch = new List<LogBlock>(WriteBatchSize);
+        long insertedCount = 0;
+
         List<string>? currentLines = null;
         DateTime currentUtc = DateTime.MinValue;
         string currentOriginal = string.Empty;
@@ -243,19 +286,21 @@ public class IngestionService
         void Flush()
         {
             if (currentLines is null) return;
-            result.Blocks.Add(new LogBlock
+            pendingBatch.Add(new LogBlock
             {
                 UniversalTimestamp = currentUtc,
                 OriginalTimestamp = currentOriginal,
                 SourceId = source.Id,
                 SourceName = source.Name,
                 SourceColor = source.DisplayColor,
-                Lines = currentLines,
-                FullText = string.Join(Environment.NewLine, currentLines),
+                FullText = string.Join('\n', currentLines),
                 TimestampParseFailed = currentFailed,
                 SourceFilePath = path
             });
+            insertedCount++;
             currentLines = null;
+
+            if (pendingBatch.Count >= WriteBatchSize) FlushBatch(pendingBatch);
         }
 
         void ProcessLine(string line)
@@ -307,8 +352,9 @@ public class IngestionService
         }
 
         Flush();
+        FlushBatch(pendingBatch);
 
-        if (result.Blocks.Count == 0 && lineIndex >= 0)
+        if (lineIndex >= 0 && insertedCount == 0)
         {
             result.Warnings.Add(new IngestionWarning
             {

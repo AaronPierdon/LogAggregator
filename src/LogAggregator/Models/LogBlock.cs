@@ -1,13 +1,20 @@
 using System;
-using System.Collections.Generic;
+
 namespace LogAggregator.Models;
 
 /// <summary>
-/// One detected log entry - the atomic unit for filtering and display. A block may span
-/// multiple physical lines (continuation lines with no leading timestamp of their own).
+/// One detected log entry - the atomic unit for filtering, display, and export. A block may
+/// span multiple physical lines (continuation lines with no leading timestamp of their own);
+/// those are joined into <see cref="FullText"/> with '\n' separators rather than stored as a
+/// separate list, since that's the only representation that needs to round-trip through SQLite.
+/// This class is a plain Dapper row-mapping target: property names here must match the
+/// LogBlocks table's column names exactly (see LogDatabase.cs).
 /// </summary>
 public sealed class LogBlock
 {
+    /// <summary>SQLite rowid. 0 for a not-yet-persisted instance.</summary>
+    public long Id { get; set; }
+
     /// <summary>Normalized timestamp, used for sort and filter. If parsing failed this is
     /// DateTime.MinValue (see <see cref="TimestampParseFailed"/>) so the row still appears
     /// rather than being silently dropped.</summary>
@@ -18,18 +25,15 @@ public sealed class LogBlock
 
     public string SourceId { get; set; } = string.Empty;
 
-    /// <summary>Denormalized for display performance (avoids a source lookup per row).</summary>
+    /// <summary>Denormalized for display performance (avoids a join per row).</summary>
     public string SourceName { get; set; } = string.Empty;
 
-    /// <summary>Denormalized hex color, used by the row-tint converter without a source lookup.</summary>
+    /// <summary>Denormalized hex color, used by the row-tint converter without a join.</summary>
     public string SourceColor { get; set; } = "#4C9BFF";
 
-    /// <summary>All lines of this block. Lines[0] is the timestamp line; anything after is a
-    /// continuation line collected until the next detected timestamp.</summary>
-    public List<string> Lines { get; set; } = new();
-
-    /// <summary>Pre-joined Lines, computed once at parse time. Filter matching and display
-    /// read this - it is never re-joined at query time.</summary>
+    /// <summary>All lines of this block joined with '\n'. Filter matching and display read
+    /// this directly; continuation lines (for export formatting) are recovered via
+    /// <see cref="SplitLines"/> rather than being stored a second time.</summary>
     public string FullText { get; set; } = string.Empty;
 
     /// <summary>True if the timestamp could not be parsed with the source's pattern - the
@@ -40,4 +44,6 @@ public sealed class LogBlock
     /// <summary>Which physical file (within the source) this block came from - useful for
     /// diagnosing parse warnings.</summary>
     public string SourceFilePath { get; set; } = string.Empty;
+
+    public string[] SplitLines() => FullText.Split('\n');
 }

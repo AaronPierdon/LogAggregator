@@ -3,9 +3,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Linq;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Windows;
-using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 using LogAggregator.Common;
@@ -15,11 +13,30 @@ using Microsoft.Win32;
 
 namespace LogAggregator.ViewModels;
 
+/// <summary>
+/// Orchestrates sources, config persistence, and the SQL-backed display window. Rows are never
+/// all held in memory at once - DisplayedBlocks is a bounded sliding window (see MaxLoadedRows)
+/// fed by paged queries against LogDatabase. This is the change that actually fixes the 36
+/// million row memory problem; everything upstream of this class (ingestion) already writes
+/// straight to SQLite rather than building an in-memory list.
+///
+/// Known limitation of this v1 windowing model: scrolling loads more rows going *forward*
+/// (appending as you approach the bottom of what's loaded, trimming from the front once the
+/// window exceeds its cap), but there's no symmetric "load more going backward" - if you jump
+/// to the end and want to scroll back up past what's still loaded, use "Jump to Start" rather
+/// than expecting the scrollbar to represent your true position across the full filtered
+/// result set. True bidirectional virtualization (a custom IList a WPF DataGrid can page
+/// against transparently in both directions) is a reasonable v2 if this ever feels limiting in
+/// practice - flagged rather than silently implemented, since it's real additional complexity.
+/// </summary>
 public class MainViewModel : ObservableObject
 {
+    private const int PageSize = 2000;
+    private const int MaxLoadedRows = 50_000;
+
     private readonly ConfigService _configService = new();
+    private readonly LogDatabase _database;
     private readonly Dictionary<string, SourceCardViewModel> _sourceLookup = new();
-    private readonly CollectionViewSource _viewSource = new();
 
     private AppSettings _settings = new();
     private DispatcherTimer? _toastTimer;
@@ -27,6 +44,10 @@ public class MainViewModel : ObservableObject
     private List<string> _appliedOr = new();
     private List<string> _appliedAnd = new();
     private List<string> _appliedExclusion = new();
+
+    private SortColumn _sortColumn = SortColumn.UniversalTimestamp;
+    private bool _sortDescending;
+    private long _loadedUpToOffset;
 
     private string _orFilterText = string.Empty;
     private string _andFilterText = string.Empty;
@@ -36,12 +57,17 @@ public class MainViewModel : ObservableObject
     private bool _filtersActive;
     private string _toastMessage = string.Empty;
     private bool _toastVisible;
+    private long _totalMatchingCount;
+    private long _grandTotalCount;
+    private bool _isLoadingMore;
 
     public ObservableCollection<SourceCardViewModel> Sources { get; } = new();
-    public ObservableCollection<LogBlock> AllBlocks { get; } = new();
-    public ObservableCollection<IngestionWarning> Warnings { get; } = new();
 
-    public ICollectionView BlocksView => _viewSource.View;
+    /// <summary>The sliding window of currently-displayed rows. Bound directly to the
+    /// DataGrid's ItemsSource - never contains more than MaxLoadedRows items.</summary>
+    public ObservableCollection<LogBlock> DisplayedBlocks { get; } = new();
+
+    public ObservableCollection<IngestionWarning> Warnings { get; } = new();
 
     public string OrFilterText { get => _orFilterText; set => SetProperty(ref _orFilterText, value); }
     public string AndFilterText { get => _andFilterText; set => SetProperty(ref _andFilterText, value); }
@@ -59,8 +85,28 @@ public class MainViewModel : ObservableObject
         private set => SetProperty(ref _filtersActive, value);
     }
 
-    /// <summary>Whether the quick-add drag &amp; drop banner is shown. Persisted; toggled from
-    /// the Settings menu or via the banner's own minimize button.</summary>
+    /// <summary>Rows matching the current filter + active sources - the denominator shown
+    /// alongside how many of those are currently loaded into memory.</summary>
+    public long TotalMatchingCount
+    {
+        get => _totalMatchingCount;
+        private set => SetProperty(ref _totalMatchingCount, value);
+    }
+
+    /// <summary>Every row across every source, regardless of filter or active state - shown for
+    /// context in the status bar.</summary>
+    public long GrandTotalCount
+    {
+        get => _grandTotalCount;
+        private set => SetProperty(ref _grandTotalCount, value);
+    }
+
+    public bool IsLoadingMore
+    {
+        get => _isLoadingMore;
+        private set => SetProperty(ref _isLoadingMore, value);
+    }
+
     public bool ShowDropZone
     {
         get => _settings.ShowDropZone;
@@ -85,7 +131,7 @@ public class MainViewModel : ObservableObject
             if (!SetProperty(ref _allActive, value)) return;
             bool newState = value ?? true;
             foreach (var card in Sources) card.Source.IsActive = newState;
-            RefreshView();
+            _ = ReloadFirstPageAsync();
         }
     }
 
@@ -97,22 +143,26 @@ public class MainViewModel : ObservableObject
     public ICommand ClearFiltersCommand { get; }
     public AsyncRelayCommand ExportCommand { get; }
     public ICommand HideDropZoneCommand { get; }
+    public AsyncRelayCommand JumpToStartCommand { get; }
+    public AsyncRelayCommand JumpToEndCommand { get; }
+    public AsyncRelayCommand LoadMoreCommand { get; }
 
     /// <summary>Requests the wizard be opened. Null card = create new source; non-null = edit.</summary>
     public event Action<SourceCardViewModel?>? WizardRequested;
 
-    public MainViewModel()
+    public MainViewModel(LogDatabase database)
     {
-        _viewSource.Source = AllBlocks;
-        _viewSource.Filter += (_, e) => e.Accepted = PassesFilter(e.Item as LogBlock);
-        _viewSource.View.SortDescriptions.Add(new SortDescription(nameof(LogBlock.UniversalTimestamp), ListSortDirection.Ascending));
+        _database = database;
 
         AddSourceCommand = new RelayCommand(() => WizardRequested?.Invoke(null));
         TogglePanelCommand = new RelayCommand(() => IsPanelCollapsed = !IsPanelCollapsed);
-        ApplyFiltersCommand = new RelayCommand(ApplyFilters, () => !AnySourceSyncing);
-        ClearFiltersCommand = new RelayCommand(ClearFilters);
-        ExportCommand = new AsyncRelayCommand(ExportAsync, () => AllBlocks.Count > 0);
+        ApplyFiltersCommand = new AsyncRelayCommand(ApplyFiltersAsync, () => !AnySourceSyncing);
+        ClearFiltersCommand = new AsyncRelayCommand(ClearFiltersAsync);
+        ExportCommand = new AsyncRelayCommand(ExportAsync, () => GrandTotalCount > 0);
         HideDropZoneCommand = new RelayCommand(HideDropZone);
+        JumpToStartCommand = new AsyncRelayCommand(ReloadFirstPageAsync);
+        JumpToEndCommand = new AsyncRelayCommand(JumpToEndAsync);
+        LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
     }
 
     public async Task InitializeAsync()
@@ -126,14 +176,19 @@ public class MainViewModel : ObservableObject
 
         UpdateAllActiveState();
 
-        // Re-populate the grid from disk on startup for any source that already had files.
-        foreach (var card in Sources.Where(c => c.Source.HasFiles).ToList())
-            _ = card.SyncAsync();
+        // Data already persists in SQLite across restarts, so - unlike the old in-memory
+        // design - we do NOT automatically re-parse every source's files on every startup.
+        // Just read back the counts already sitting in the database.
+        foreach (var card in Sources)
+            card.Source.ParsedBlockCount = (int)Math.Min(_database.CountForSource(card.Source.Id), int.MaxValue);
+
+        await RefreshGrandTotalAsync().ConfigureAwait(true);
+        await ReloadFirstPageAsync().ConfigureAwait(true);
     }
 
     private void AddSourceCardInternal(LogSource source)
     {
-        var card = new SourceCardViewModel(source);
+        var card = new SourceCardViewModel(source, _database);
         card.SyncCompleted += OnSyncCompleted;
         card.SyncCancelled += OnSyncCancelled;
         card.ConfigChanged += () => _ = SaveConfigAsync();
@@ -143,7 +198,7 @@ public class MainViewModel : ObservableObject
         {
             if (e.PropertyName == nameof(LogSource.IsActive))
             {
-                RefreshView();
+                _ = ReloadFirstPageAsync();
                 UpdateAllActiveState();
             }
             if (e.PropertyName == nameof(LogSource.IsSyncing))
@@ -185,10 +240,186 @@ public class MainViewModel : ObservableObject
             await card.SyncAsync().ConfigureAwait(true);
     }
 
-    /// <summary>Called when files (or a zip) are dropped on the main window's quick-add drop
-    /// zone. Detects everything automatically and adds+syncs a new source with zero prompts -
-    /// if detection isn't confident, it declines and points the user at "+ Add Source" instead,
-    /// so a low-confidence guess is never silently applied.</summary>
+    public async Task RemoveSourceAsync(SourceCardViewModel card)
+    {
+        card.Source.CurrentCts?.Cancel();
+        await Task.Run(() => _database.DeleteBlocksForSource(card.Source.Id)).ConfigureAwait(true);
+
+        Sources.Remove(card);
+        _sourceLookup.Remove(card.Source.Id);
+        UpdateAllActiveState();
+
+        await RefreshGrandTotalAsync().ConfigureAwait(true);
+        await ReloadFirstPageAsync().ConfigureAwait(true);
+        await SaveConfigAsync().ConfigureAwait(true);
+    }
+
+    private async void OnSyncCompleted(SourceCardViewModel card, SourceIngestionResult result)
+    {
+        foreach (var warning in result.Warnings) Warnings.Add(warning);
+        await RefreshGrandTotalAsync().ConfigureAwait(true);
+        await ReloadFirstPageAsync().ConfigureAwait(true);
+        CommandManager.InvalidateRequerySuggested();
+    }
+
+    private async void OnSyncCancelled(SourceCardViewModel card)
+    {
+        await RefreshGrandTotalAsync().ConfigureAwait(true);
+        await ReloadFirstPageAsync().ConfigureAwait(true);
+    }
+
+    // ===================================================================
+    // SQL-backed windowed loading
+    // ===================================================================
+
+    private List<string> ActiveSourceIds() => Sources.Where(s => s.Source.IsActive).Select(s => s.Source.Id).ToList();
+
+    private async Task RefreshGrandTotalAsync()
+    {
+        var allIds = Sources.Select(s => s.Source.Id).ToList();
+        GrandTotalCount = allIds.Count == 0
+            ? 0
+            : await Task.Run(() => _database.CountMatching(allIds, new List<string>(), new List<string>(), new List<string>())).ConfigureAwait(true);
+    }
+
+    public async Task ReloadFirstPageAsync()
+    {
+        var activeIds = ActiveSourceIds();
+
+        if (activeIds.Count == 0)
+        {
+            DisplayedBlocks.Clear();
+            TotalMatchingCount = 0;
+            _loadedUpToOffset = 0;
+            return;
+        }
+
+        var count = await Task.Run(() => _database.CountMatching(activeIds, _appliedOr, _appliedAnd, _appliedExclusion)).ConfigureAwait(true);
+        var page = await Task.Run(() => _database.QueryPage(activeIds, _appliedOr, _appliedAnd, _appliedExclusion, _sortColumn, _sortDescending, 0, PageSize)).ConfigureAwait(true);
+
+        TotalMatchingCount = count;
+        DisplayedBlocks.Clear();
+        foreach (var b in page) DisplayedBlocks.Add(b);
+        _loadedUpToOffset = page.Count;
+    }
+
+    public async Task LoadMoreAsync()
+    {
+        if (IsLoadingMore) return;
+        if (_loadedUpToOffset >= TotalMatchingCount) return;
+
+        IsLoadingMore = true;
+        try
+        {
+            var activeIds = ActiveSourceIds();
+            if (activeIds.Count == 0) return;
+
+            var page = await Task.Run(() => _database.QueryPage(
+                activeIds, _appliedOr, _appliedAnd, _appliedExclusion,
+                _sortColumn, _sortDescending, (int)_loadedUpToOffset, PageSize)).ConfigureAwait(true);
+
+            foreach (var b in page) DisplayedBlocks.Add(b);
+            _loadedUpToOffset += page.Count;
+
+            // Sliding window: trim from the front once we exceed the cap, so memory stays
+            // bounded no matter how far the user keeps scrolling through a huge result set.
+            if (DisplayedBlocks.Count > MaxLoadedRows)
+            {
+                int toRemove = DisplayedBlocks.Count - MaxLoadedRows;
+                for (int i = 0; i < toRemove; i++) DisplayedBlocks.RemoveAt(0);
+            }
+        }
+        finally
+        {
+            IsLoadingMore = false;
+        }
+    }
+
+    public async Task JumpToEndAsync()
+    {
+        var activeIds = ActiveSourceIds();
+        if (activeIds.Count == 0) return;
+
+        var count = await Task.Run(() => _database.CountMatching(activeIds, _appliedOr, _appliedAnd, _appliedExclusion)).ConfigureAwait(true);
+        TotalMatchingCount = count;
+
+        var tailOffset = (int)Math.Max(0, count - PageSize);
+        var page = await Task.Run(() => _database.QueryPage(activeIds, _appliedOr, _appliedAnd, _appliedExclusion, _sortColumn, _sortDescending, tailOffset, PageSize)).ConfigureAwait(true);
+
+        DisplayedBlocks.Clear();
+        foreach (var b in page) DisplayedBlocks.Add(b);
+        _loadedUpToOffset = count;
+    }
+
+    /// <summary>Called from the DataGrid header click handler in MainWindow.xaml.cs, since
+    /// sorting is now a fresh SQL query rather than an in-memory ICollectionView re-sort.</summary>
+    public async Task SetSortAsync(SortColumn column, bool descending)
+    {
+        _sortColumn = column;
+        _sortDescending = descending;
+        await ReloadFirstPageAsync().ConfigureAwait(true);
+    }
+
+    public SortColumn CurrentSortColumn => _sortColumn;
+    public bool CurrentSortDescending => _sortDescending;
+
+    // ===================================================================
+    // Filters
+    // ===================================================================
+
+    private async Task ApplyFiltersAsync()
+    {
+        _appliedOr = FilterService.ParseTerms(OrFilterText);
+        _appliedAnd = FilterService.ParseTerms(AndFilterText);
+        _appliedExclusion = FilterService.ParseTerms(ExclusionFilterText);
+        FiltersActive = _appliedOr.Count > 0 || _appliedAnd.Count > 0 || _appliedExclusion.Count > 0;
+        await ReloadFirstPageAsync().ConfigureAwait(true);
+    }
+
+    private async Task ClearFiltersAsync()
+    {
+        OrFilterText = string.Empty;
+        AndFilterText = string.Empty;
+        ExclusionFilterText = string.Empty;
+        _appliedOr = new(); _appliedAnd = new(); _appliedExclusion = new();
+        FiltersActive = false;
+        await ReloadFirstPageAsync().ConfigureAwait(true);
+    }
+
+    private void UpdateAllActiveState()
+    {
+        if (Sources.Count == 0) { _allActive = true; OnPropertyChanged(nameof(AllActive)); return; }
+        bool allOn = Sources.All(s => s.Source.IsActive);
+        bool allOff = Sources.All(s => !s.Source.IsActive);
+        _allActive = allOn ? true : (allOff ? false : (bool?)null);
+        OnPropertyChanged(nameof(AllActive));
+    }
+
+    private void HideDropZone()
+    {
+        ShowDropZone = false;
+        ShowToast("Drag & drop area hidden. Re-enable it anytime from Settings > Interface.", TimeSpan.FromSeconds(6));
+    }
+
+    public void ShowToast(string message, TimeSpan? duration = null)
+    {
+        ToastMessage = message;
+        ToastVisible = true;
+
+        _toastTimer?.Stop();
+        _toastTimer = new DispatcherTimer { Interval = duration ?? TimeSpan.FromSeconds(4) };
+        _toastTimer.Tick += (_, _) =>
+        {
+            ToastVisible = false;
+            _toastTimer?.Stop();
+        };
+        _toastTimer.Start();
+    }
+
+    // ===================================================================
+    // Quick-add drop zone
+    // ===================================================================
+
     public async Task QuickAddSourceFromDropAsync(IEnumerable<string> rawPaths)
     {
         var expanded = FileDropHelper.ExpandDroppedPaths(rawPaths, msg => ShowToast(msg));
@@ -232,98 +463,9 @@ public class MainViewModel : ObservableObject
         await Sources.Last().SyncAsync().ConfigureAwait(true);
     }
 
-    public async Task RemoveSourceAsync(SourceCardViewModel card)
-    {
-        card.Source.CurrentCts?.Cancel();
-        RemoveBlocksForSource(card.Source.Id);
-        Sources.Remove(card);
-        _sourceLookup.Remove(card.Source.Id);
-        RefreshView();
-        UpdateAllActiveState();
-        await SaveConfigAsync().ConfigureAwait(true);
-    }
-
-    private void OnSyncCompleted(SourceCardViewModel card, SourceIngestionResult result)
-    {
-        RemoveBlocksForSource(card.Source.Id);
-        foreach (var block in result.Blocks) AllBlocks.Add(block);
-        foreach (var warning in result.Warnings) Warnings.Add(warning);
-        RefreshView();
-        CommandManager.InvalidateRequerySuggested();
-    }
-
-    private void OnSyncCancelled(SourceCardViewModel card)
-    {
-        RemoveBlocksForSource(card.Source.Id);
-        card.Source.ParsedBlockCount = 0;
-        RefreshView();
-    }
-
-    private void RemoveBlocksForSource(string sourceId)
-    {
-        var toRemove = AllBlocks.Where(b => b.SourceId == sourceId).ToList();
-        foreach (var b in toRemove) AllBlocks.Remove(b);
-    }
-
-    private bool PassesFilter(LogBlock? block)
-    {
-        if (block is null) return false;
-        if (_sourceLookup.TryGetValue(block.SourceId, out var card) && !card.Source.IsActive) return false;
-
-        if (_appliedOr.Count == 0 && _appliedAnd.Count == 0 && _appliedExclusion.Count == 0) return true;
-        return FilterService.BlockPasses(block, _appliedOr, _appliedAnd, _appliedExclusion);
-    }
-
-    private void ApplyFilters()
-    {
-        _appliedOr = FilterService.ParseTerms(OrFilterText);
-        _appliedAnd = FilterService.ParseTerms(AndFilterText);
-        _appliedExclusion = FilterService.ParseTerms(ExclusionFilterText);
-        FiltersActive = _appliedOr.Count > 0 || _appliedAnd.Count > 0 || _appliedExclusion.Count > 0;
-        RefreshView();
-    }
-
-    private void ClearFilters()
-    {
-        OrFilterText = string.Empty;
-        AndFilterText = string.Empty;
-        ExclusionFilterText = string.Empty;
-        _appliedOr = new(); _appliedAnd = new(); _appliedExclusion = new();
-        FiltersActive = false;
-        RefreshView();
-    }
-
-    private void RefreshView() => BlocksView.Refresh();
-
-    private void UpdateAllActiveState()
-    {
-        if (Sources.Count == 0) { _allActive = true; OnPropertyChanged(nameof(AllActive)); return; }
-        bool allOn = Sources.All(s => s.Source.IsActive);
-        bool allOff = Sources.All(s => !s.Source.IsActive);
-        _allActive = allOn ? true : (allOff ? false : (bool?)null);
-        OnPropertyChanged(nameof(AllActive));
-    }
-
-    private void HideDropZone()
-    {
-        ShowDropZone = false;
-        ShowToast("Drag & drop area hidden. Re-enable it anytime from Settings > Interface.", TimeSpan.FromSeconds(6));
-    }
-
-    public void ShowToast(string message, TimeSpan? duration = null)
-    {
-        ToastMessage = message;
-        ToastVisible = true;
-
-        _toastTimer?.Stop();
-        _toastTimer = new DispatcherTimer { Interval = duration ?? TimeSpan.FromSeconds(4) };
-        _toastTimer.Tick += (_, _) =>
-        {
-            ToastVisible = false;
-            _toastTimer?.Stop();
-        };
-        _toastTimer.Start();
-    }
+    // ===================================================================
+    // Export
+    // ===================================================================
 
     private async Task ExportAsync()
     {
@@ -335,11 +477,20 @@ public class MainViewModel : ObservableObject
         };
         if (dialog.ShowDialog() != true) return;
 
-        var items = BlocksView.Cast<LogBlock>().ToList();
-        await ExportService.ExportAsync(dialog.FileName, items).ConfigureAwait(true);
+        var activeIds = ActiveSourceIds();
+        if (activeIds.Count == 0)
+        {
+            MessageBox.Show("No active sources to export.", "Export", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        await ExportService.ExportAsync(
+            dialog.FileName, _database, activeIds,
+            _appliedOr, _appliedAnd, _appliedExclusion,
+            _sortColumn, _sortDescending).ConfigureAwait(true);
 
         MessageBox.Show(
-            $"Exported {items.Count:N0} blocks to:\n{dialog.FileName}",
+            $"Exported to:\n{dialog.FileName}",
             "Export complete", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 

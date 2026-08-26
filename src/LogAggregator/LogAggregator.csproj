@@ -35,4 +35,14 @@
     <None Update="app.manifest" CopyToOutputDirectory="PreserveNewest" Condition="Exists('app.manifest')" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Dapper: micro-ORM, executes plain SQL against any IDbConnection.
+         Microsoft.Data.Sqlite: embedded, file-based SQL engine - no local server/service to
+         install or run. Bundles a native SQLite binary per-RID, which publishes cleanly as
+         part of a self-contained single-file build (this is one of the most common/best-tested
+         native dependencies in the .NET publish pipeline). -->
+    <PackageReference Include="Dapper" Version="2.1.35" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
 </Project>

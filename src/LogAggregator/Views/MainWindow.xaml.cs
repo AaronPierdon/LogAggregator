@@ -1,28 +1,38 @@
 using System;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using LogAggregator.Models;
+using LogAggregator.Services;
 using LogAggregator.ViewModels;
 
 namespace LogAggregator.Views;
 
 public partial class MainWindow : Window
 {
-    private readonly MainViewModel _viewModel = new();
+    private readonly LogDatabase _database = new();
+    private readonly MainViewModel _viewModel;
     private readonly Brush _dropZoneDefaultBorder;
     private readonly Brush _dropZoneHoverBorder;
+    private ScrollViewer? _gridScrollViewer;
 
     public MainWindow()
     {
         InitializeComponent();
+
+        _database.Initialize();
+        _viewModel = new MainViewModel(_database);
+
         DataContext = _viewModel;
         _viewModel.WizardRequested += OnWizardRequested;
         Loaded += async (_, _) => await _viewModel.InitializeAsync();
 
         _dropZoneDefaultBorder = (Brush)FindResource("Brush.Border");
         _dropZoneHoverBorder = (Brush)FindResource("Brush.AccentGreen");
+
+        LogGrid.Loaded += LogGrid_Loaded;
     }
 
     // ===================================================================
@@ -93,6 +103,61 @@ public partial class MainWindow : Window
         {
             Clipboard.SetText(block.FullText);
         }
+    }
+
+    // ===================================================================
+    // Grid: SQL-driven sort on header click, scroll-triggered "load more"
+    // ===================================================================
+
+    private void LogGrid_Loaded(object sender, RoutedEventArgs e)
+    {
+        _gridScrollViewer ??= FindVisualChild<ScrollViewer>(LogGrid);
+        if (_gridScrollViewer is not null)
+            _gridScrollViewer.ScrollChanged += GridScrollViewer_ScrollChanged;
+    }
+
+    private async void GridScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        // Fire "load more" once the user is within a couple of screens' worth of the bottom of
+        // whatever is currently loaded. LoadMoreAsync no-ops safely if a load is already in
+        // flight or everything matching the filter is already loaded.
+        const double threshold = 400;
+        if (e.ExtentHeight - (e.VerticalOffset + e.ViewportHeight) <= threshold)
+        {
+            await _viewModel.LoadMoreAsync();
+        }
+    }
+
+    private async void LogGrid_Sorting(object sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true;
+
+        var key = DataGridColumnExtensions.GetSortColumnKey(e.Column);
+        if (key is null || !Enum.TryParse<SortColumn>(key, out var column))
+            return;
+
+        // Clicking the already-sorted column toggles direction; clicking a different column
+        // always starts ascending.
+        bool descending = _viewModel.CurrentSortColumn == column && !_viewModel.CurrentSortDescending;
+
+        foreach (var col in LogGrid.Columns) col.SortDirection = null;
+        e.Column.SortDirection = descending ? ListSortDirection.Descending : ListSortDirection.Ascending;
+
+        await _viewModel.SetSortAsync(column, descending);
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is T typed) return typed;
+
+            var descendant = FindVisualChild<T>(child);
+            if (descendant is not null) return descendant;
+        }
+        return null;
     }
 
     // ===================================================================
