@@ -1,23 +1,23 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
+using System.Linq;
 using System.Text.Json.Serialization;
 using LogAggregator.Common;
 
 namespace LogAggregator.Models;
 
 /// <summary>
-/// One data source card in the left panel. Persisted to sources.config.json.
+/// One source card in the left panel. Persisted to sources.config.json. A Source is now just
+/// identity (name, its own display color, active flag) plus a group of <see cref="LogTypes"/>
+/// bindings - e.g. a "PLANT-PC-04" source might have a Kepware LogType binding and an
+/// Event Viewer LogType binding, each with its own files and parse state. File format and
+/// timestamp parsing live on the LogType, not here (see LogType.cs).
 /// </summary>
 public class LogSource : ObservableObject
 {
     private string _name = string.Empty;
-    private FileType _type = FileType.FlatText;
     private string _displayColor = "#4C9BFF";
     private bool _isActive = true;
-    private int _parsedBlockCount;
-    private bool _isSyncing;
-    private bool _isLocked;
 
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -27,22 +27,14 @@ public class LogSource : ObservableObject
         set => SetProperty(ref _name, value);
     }
 
-    public FileType Type
-    {
-        get => _type;
-        set => SetProperty(ref _type, value);
-    }
-
-    public TimestampProfile TimestampProfile { get; set; } = new();
-
-    /// <summary>Hex color string, e.g. "#4C9BFF", used for row tinting and the card swatch.</summary>
+    /// <summary>Hex color string used when the "Log line coloring" setting is set to Source
+    /// color, and as the fallback wedge color in the collapsed rail for a source with no
+    /// LogTypes bound yet.</summary>
     public string DisplayColor
     {
         get => _displayColor;
         set => SetProperty(ref _displayColor, value);
     }
-
-    public List<string> FilePaths { get; set; } = new();
 
     /// <summary>Whether this source's rows appear in the main view (card checkbox).</summary>
     public bool IsActive
@@ -51,37 +43,21 @@ public class LogSource : ObservableObject
         set => SetProperty(ref _isActive, value);
     }
 
-    public int ParsedBlockCount
-    {
-        get => _parsedBlockCount;
-        set => SetProperty(ref _parsedBlockCount, value);
-    }
-
-    /// <summary>True while a sync/import task is running for this source. Not persisted.</summary>
-    [JsonIgnore]
-    public bool IsSyncing
-    {
-        get => _isSyncing;
-        set
-        {
-            if (SetProperty(ref _isSyncing, value))
-            {
-                OnPropertyChanged(nameof(CardState));
-                OnPropertyChanged(nameof(IsLocked));
-            }
-        }
-    }
-
-    /// <summary>Wizard is locked while syncing (per spec) or explicitly locked by the caller.</summary>
-    [JsonIgnore]
-    public bool IsLocked
-    {
-        get => _isLocked || _isSyncing;
-        set => SetProperty(ref _isLocked, value);
-    }
+    /// <summary>One entry per LogType bound to this source. Order is preserved so chips don't
+    /// reshuffle every time the app restarts.</summary>
+    public List<SourceLogType> LogTypes { get; set; } = new();
 
     [JsonIgnore]
-    public bool HasFiles => FilePaths.Count > 0;
+    public bool HasFiles => LogTypes.Any(b => b.HasFiles);
+
+    [JsonIgnore]
+    public bool IsSyncing => LogTypes.Any(b => b.IsSyncing);
+
+    [JsonIgnore]
+    public bool HasAnyError => LogTypes.Any(b => b.HasError);
+
+    [JsonIgnore]
+    public int ParsedBlockCount => LogTypes.Sum(b => b.ParsedBlockCount);
 
     /// <summary>Card visual state: NoFiles (white/grey), Ready (green accent), Syncing.</summary>
     [JsonIgnore]
@@ -94,13 +70,16 @@ public class LogSource : ObservableObject
         }
     }
 
-    /// <summary>Live cancellation token source for an in-flight sync. Not persisted, not bound.</summary>
-    [JsonIgnore]
-    public CancellationTokenSource? CurrentCts { get; set; }
+    /// <summary>Finds (or null if not bound) this source's binding for a given LogType.</summary>
+    public SourceLogType? FindBinding(string logTypeId) =>
+        LogTypes.FirstOrDefault(b => b.LogTypeId == logTypeId);
 
     public void RefreshComputedState()
     {
         OnPropertyChanged(nameof(HasFiles));
+        OnPropertyChanged(nameof(IsSyncing));
+        OnPropertyChanged(nameof(HasAnyError));
+        OnPropertyChanged(nameof(ParsedBlockCount));
         OnPropertyChanged(nameof(CardState));
     }
 }

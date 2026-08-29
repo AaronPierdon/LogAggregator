@@ -27,9 +27,17 @@ public enum SortColumn
 /// (~2000 rows) so contention is brief. Reads (count/page/export queries) use their own
 /// connections and are not serialized - WAL mode lets readers proceed without waiting on the
 /// writer.
+///
+/// Schema version 2 adds LogTypeId/LogTypeName/LogTypeColor/LogTypeIcon columns (a row is now
+/// produced by one LogType bound to one Source, not just a Source). This is a from-scratch
+/// cutover for the app's current early-development stage: if the on-disk file isn't already at
+/// schema version 2, the LogBlocks table is dropped and recreated rather than migrated -
+/// existing log data is intentionally discarded (see Initialize()).
 /// </summary>
 public class LogDatabase
 {
+    private const int SchemaVersion = 2;
+
     private readonly string _connectionString;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
@@ -53,12 +61,26 @@ public class LogDatabase
         connection.Execute("PRAGMA synchronous=NORMAL;");
         connection.Execute("PRAGMA busy_timeout=5000;");
 
+        var currentVersion = connection.ExecuteScalar<long>("PRAGMA user_version;");
+        if (currentVersion != SchemaVersion)
+        {
+            // Old (or no) schema - drop and recreate rather than migrate. LogTypes are a new
+            // concept the old rows have no equivalent data for, and per the app's current
+            // early-development stage, existing log data is fine to discard here.
+            connection.Execute("DROP TABLE IF EXISTS LogBlocks;");
+            connection.Execute($"PRAGMA user_version = {SchemaVersion};");
+        }
+
         connection.Execute(@"
             CREATE TABLE IF NOT EXISTS LogBlocks (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 SourceId TEXT NOT NULL,
                 SourceName TEXT NOT NULL,
                 SourceColor TEXT NOT NULL,
+                LogTypeId TEXT NOT NULL,
+                LogTypeName TEXT NOT NULL,
+                LogTypeColor TEXT NOT NULL,
+                LogTypeIcon TEXT NOT NULL,
                 UniversalTimestamp TEXT NOT NULL,
                 OriginalTimestamp TEXT NOT NULL,
                 FullText TEXT NOT NULL,
@@ -68,6 +90,7 @@ public class LogDatabase
 
         connection.Execute("CREATE INDEX IF NOT EXISTS idx_logblocks_source_ts ON LogBlocks(SourceId, UniversalTimestamp);");
         connection.Execute("CREATE INDEX IF NOT EXISTS idx_logblocks_ts ON LogBlocks(UniversalTimestamp);");
+        connection.Execute("CREATE INDEX IF NOT EXISTS idx_logblocks_source_logtype ON LogBlocks(SourceId, LogTypeId);");
     }
 
     private SqliteConnection OpenConnection() => new(_connectionString);
@@ -77,8 +100,8 @@ public class LogDatabase
     // ===================================================================
 
     private const string InsertSql = @"
-        INSERT INTO LogBlocks (SourceId, SourceName, SourceColor, UniversalTimestamp, OriginalTimestamp, FullText, TimestampParseFailed, SourceFilePath)
-        VALUES (@SourceId, @SourceName, @SourceColor, @UniversalTimestamp, @OriginalTimestamp, @FullText, @TimestampParseFailed, @SourceFilePath);";
+        INSERT INTO LogBlocks (SourceId, SourceName, SourceColor, LogTypeId, LogTypeName, LogTypeColor, LogTypeIcon, UniversalTimestamp, OriginalTimestamp, FullText, TimestampParseFailed, SourceFilePath)
+        VALUES (@SourceId, @SourceName, @SourceColor, @LogTypeId, @LogTypeName, @LogTypeColor, @LogTypeIcon, @UniversalTimestamp, @OriginalTimestamp, @FullText, @TimestampParseFailed, @SourceFilePath);";
 
     /// <summary>Inserts a batch of blocks inside one transaction. Called repeatedly with small
     /// batches (~2000 rows) as ingestion parses through a file, so memory never holds more than
@@ -110,6 +133,26 @@ public class LogDatabase
             using var connection = OpenConnection();
             connection.Open();
             connection.Execute("DELETE FROM LogBlocks WHERE SourceId = @sourceId;", new { sourceId });
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>Deletes only the rows for one LogType binding on one source - used when a
+    /// LogType is unbound/removed from a source (or re-synced) without touching that source's
+    /// other LogTypes.</summary>
+    public void DeleteBlocksForBinding(string sourceId, string logTypeId)
+    {
+        _writeLock.Wait();
+        try
+        {
+            using var connection = OpenConnection();
+            connection.Open();
+            connection.Execute(
+                "DELETE FROM LogBlocks WHERE SourceId = @sourceId AND LogTypeId = @logTypeId;",
+                new { sourceId, logTypeId });
         }
         finally
         {
@@ -154,6 +197,59 @@ public class LogDatabase
         }
     }
 
+    /// <summary>Propagates a LogType color edit (from the LogTypes window) onto every
+    /// already-ingested row for that LogType, across every source it's bound to.</summary>
+    public void UpdateLogTypeColor(string logTypeId, string newColorHex)
+    {
+        _writeLock.Wait();
+        try
+        {
+            using var connection = OpenConnection();
+            connection.Open();
+            connection.Execute(
+                "UPDATE LogBlocks SET LogTypeColor = @newColorHex WHERE LogTypeId = @logTypeId;",
+                new { logTypeId, newColorHex });
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    public void UpdateLogTypeIcon(string logTypeId, string newIconGlyph)
+    {
+        _writeLock.Wait();
+        try
+        {
+            using var connection = OpenConnection();
+            connection.Open();
+            connection.Execute(
+                "UPDATE LogBlocks SET LogTypeIcon = @newIconGlyph WHERE LogTypeId = @logTypeId;",
+                new { logTypeId, newIconGlyph });
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    public void UpdateLogTypeName(string logTypeId, string newName)
+    {
+        _writeLock.Wait();
+        try
+        {
+            using var connection = OpenConnection();
+            connection.Open();
+            connection.Execute(
+                "UPDATE LogBlocks SET LogTypeName = @newName WHERE LogTypeId = @logTypeId;",
+                new { logTypeId, newName });
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
     // ===================================================================
     // Reads
     // ===================================================================
@@ -163,6 +259,15 @@ public class LogDatabase
         using var connection = OpenConnection();
         connection.Open();
         return connection.ExecuteScalar<long>("SELECT COUNT(*) FROM LogBlocks WHERE SourceId = @sourceId;", new { sourceId });
+    }
+
+    public long CountForBinding(string sourceId, string logTypeId)
+    {
+        using var connection = OpenConnection();
+        connection.Open();
+        return connection.ExecuteScalar<long>(
+            "SELECT COUNT(*) FROM LogBlocks WHERE SourceId = @sourceId AND LogTypeId = @logTypeId;",
+            new { sourceId, logTypeId });
     }
 
     public long CountMatching(IReadOnlyCollection<string> activeSourceIds, IReadOnlyList<string> orTerms, IReadOnlyList<string> andTerms, IReadOnlyList<string> exclusionTerms)
@@ -184,7 +289,7 @@ public class LogDatabase
 
         var orderSql = $"{ColumnSql(sortColumn)} {(descending ? "DESC" : "ASC")}";
         var sql = $@"
-            SELECT Id, SourceId, SourceName, SourceColor, UniversalTimestamp, OriginalTimestamp, FullText, TimestampParseFailed, SourceFilePath
+            SELECT Id, SourceId, SourceName, SourceColor, LogTypeId, LogTypeName, LogTypeColor, LogTypeIcon, UniversalTimestamp, OriginalTimestamp, FullText, TimestampParseFailed, SourceFilePath
             FROM LogBlocks
             WHERE {whereSql}
             ORDER BY {orderSql}
@@ -208,7 +313,7 @@ public class LogDatabase
         var (whereSql, parameters) = BuildFilterSql(activeSourceIds, orTerms, andTerms, exclusionTerms);
         var orderSql = $"{ColumnSql(sortColumn)} {(descending ? "DESC" : "ASC")}";
         var sql = $@"
-            SELECT Id, SourceId, SourceName, SourceColor, UniversalTimestamp, OriginalTimestamp, FullText, TimestampParseFailed, SourceFilePath
+            SELECT Id, SourceId, SourceName, SourceColor, LogTypeId, LogTypeName, LogTypeColor, LogTypeIcon, UniversalTimestamp, OriginalTimestamp, FullText, TimestampParseFailed, SourceFilePath
             FROM LogBlocks
             WHERE {whereSql}
             ORDER BY {orderSql};";

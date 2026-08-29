@@ -4,3 +4,9 @@ obj/
 *.user
 sources.config.json
 *.log
+
+# SIMULATION MODE (opt-in, see App.xaml.cs / LogAggregator.csproj's IncludeSimulationMode) -
+# generated report files, in case --simulate is ever pointed at a folder inside the repo
+# instead of the default Desktop/OS-temp locations it normally uses.
+LogAggregator-simulation-report-*.txt
+SimulationReports/

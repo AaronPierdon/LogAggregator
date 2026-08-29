@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ===================================================================================
+       SIMULATION / TESTING SUPPORT PROJECT - added to help stress-test the timestamp
+       detection engine (Services/TimestampDetector.cs) with generated data instead of only
+       the handful of real sample logs in /samples.
+
+       This project is a plain class library - it is NOT part of the shipping app. Nothing
+       in src/LogAggregator/LogAggregator.csproj references it unless the optional
+       "IncludeSimulationMode" MSBuild property is turned on (see the comment block in
+       LogAggregator.csproj and the matching #if SIMULATION_MODE block in App.xaml.cs). A
+       normal Debug/Release build of the app is completely unaffected by this project's
+       existence.
+
+       Target framework matches the main app (net8.0-windows) purely to avoid any TFM/RID
+       friction when it's referenced from either the app (simulation mode) or the test
+       project - it does not use any WPF or Windows-only APIs itself.
+       =================================================================================== -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>LogAggregator.SampleData</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pulls in the real detection engine (TimestampDetector, FileTypeDetector,
+         DelimitedLineParser) and models (FileType, TimestampProfile, etc.) so the generator
+         and the simulation runner exercise the exact same code the shipping app uses -
+         nothing here is a reimplementation of the detection logic. -->
+    <ProjectReference Include="..\..\src\LogAggregator\LogAggregator.csproj" />
+  </ItemGroup>
+
+</Project>

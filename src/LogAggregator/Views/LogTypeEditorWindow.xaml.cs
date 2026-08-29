@@ -6,17 +6,18 @@ using LogAggregator.ViewModels;
 
 namespace LogAggregator.Views;
 
-public partial class WizardWindow : Window
+public partial class LogTypeEditorWindow : Window
 {
-    private readonly WizardViewModel _viewModel;
+    private readonly LogTypeEditorViewModel _viewModel;
     private readonly Brush _dropZoneDefaultBorder;
     private readonly Brush _dropZoneHoverBorder;
 
-    /// <summary>Raised when the user clicks "Delete Source" in edit mode. The caller closes
-    /// this window and removes the source.</summary>
+    /// <summary>Raised when the user clicks "Delete Log Type" in edit mode. The caller closes
+    /// this window and removes the LogType (after confirming/cascading any Sources still bound
+    /// to it - see LogTypesWindow.xaml.cs).</summary>
     public event Action? DeleteRequested;
 
-    public WizardWindow(WizardViewModel viewModel)
+    public LogTypeEditorWindow(LogTypeEditorViewModel viewModel)
     {
         InitializeComponent();
         _viewModel = viewModel;
@@ -50,7 +51,7 @@ public partial class WizardWindow : Window
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
     // ===================================================================
-    // File drop zone
+    // Sample file drop zone
     // ===================================================================
 
     private void FileDropZone_DragEnter(object sender, DragEventArgs e)
@@ -86,8 +87,8 @@ public partial class WizardWindow : Window
     private void DeleteButton_Click(object sender, RoutedEventArgs e)
     {
         var confirm = MessageBox.Show(
-            "Delete this source and all of its loaded rows? This cannot be undone.",
-            "Delete Source", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            "Delete this Log Type? If it's still bound to any Source, that binding (and its rows) will be removed too.",
+            "Delete Log Type", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
         if (confirm == MessageBoxResult.Yes)
             DeleteRequested?.Invoke();

@@ -1,5 +1,7 @@
 using System;
+using System.Linq;
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -17,6 +19,7 @@ public partial class MainWindow : Window
     private readonly Brush _dropZoneDefaultBorder;
     private readonly Brush _dropZoneHoverBorder;
     private ScrollViewer? _gridScrollViewer;
+    private WarningsWindow? _warningsWindow;
 
     public MainWindow()
     {
@@ -26,7 +29,10 @@ public partial class MainWindow : Window
         _viewModel = new MainViewModel(_database);
 
         DataContext = _viewModel;
-        _viewModel.WizardRequested += OnWizardRequested;
+        _viewModel.LogTypesRequested += OnLogTypesRequested;
+        _viewModel.NewLogTypeRequestedForDrop += OnNewLogTypeRequestedForDrop;
+        _viewModel.LogTypeSettingsRequested += OnLogTypeSettingsRequested;
+        _viewModel.ViewWarningsRequested += OnViewWarningsRequested;
         Loaded += async (_, _) => await _viewModel.InitializeAsync();
 
         _dropZoneDefaultBorder = (Brush)FindResource("Brush.Border");
@@ -161,27 +167,90 @@ public partial class MainWindow : Window
     }
 
     // ===================================================================
-    // Wizard flow
+    // Manage Log Types
     // ===================================================================
 
-    private void OnWizardRequested(SourceCardViewModel? existingCard)
+    private void OnLogTypesRequested()
     {
-        var wizardViewModel = new WizardViewModel(existingCard?.Source);
-        var window = new WizardWindow(wizardViewModel) { Owner = this };
+        var logTypesViewModel = new LogTypesViewModel(_viewModel.LogTypes, _viewModel.Sources, _database);
+        // LogTypesViewModel edits LogTypes/Sources in place (they're the same collection
+        // instances MainViewModel owns) rather than going through a result object, so all this
+        // needs to do is persist - there's no "apply" step like the old wizard had.
+        logTypesViewModel.ConfigChanged += () => _ = _viewModel.SaveConfigAsync();
 
-        window.DeleteRequested += async () =>
+        var window = new LogTypesWindow(logTypesViewModel) { Owner = this };
+        window.ShowDialog();
+    }
+
+    /// <summary>A card-level drop didn't match any existing LogType - the user picked
+    /// "+ New Log Type..." from SourceCardViewModel's popup. Open the full editor pre-seeded
+    /// with the dropped sample file(s) so detection runs against real content immediately, then
+    /// bind the finished LogType to the card that requested it.</summary>
+    private void OnNewLogTypeRequestedForDrop(SourceCardViewModel card, List<string> droppedPaths)
+    {
+        var editorViewModel = new LogTypeEditorViewModel(existing: null, initialSampleFiles: droppedPaths);
+        var window = new LogTypeEditorWindow(editorViewModel) { Owner = this };
+
+        bool? finished = window.ShowDialog();
+        if (finished == true)
+        {
+            var result = editorViewModel.BuildResult();
+            _ = _viewModel.CompleteNewLogTypeDropAsync(card, result);
+        }
+    }
+
+    /// <summary>A chip's right-click menu asked to open the LogType editor directly for an
+    /// existing LogType ("Log Type Settings..." or "Set Timestamp Pattern...") - bypasses the
+    /// "Manage Log Types" list entirely and pre-seeds the editor with this binding's real files
+    /// so detection runs immediately. Builds a transient LogTypesViewModel purely to reuse its
+    /// already-tested ApplyEditorResult/DeleteCommand cascade logic (propagate name/color/icon/
+    /// pattern changes to every card + the database, or cascade a delete) - mirrors
+    /// OnLogTypesRequested/LogTypesWindow.OnEditorRequested exactly, just without showing the
+    /// list window in between.</summary>
+    private void OnLogTypeSettingsRequested(SourceLogType binding, LogType logType, bool forceManualPatternStep)
+    {
+        var logTypesViewModel = new LogTypesViewModel(_viewModel.LogTypes, _viewModel.Sources, _database);
+        logTypesViewModel.ConfigChanged += () => _ = _viewModel.SaveConfigAsync();
+
+        var initialSampleFiles = binding.FilePaths.Count > 0 ? binding.FilePaths : null;
+        var editorViewModel = new LogTypeEditorViewModel(logType, initialSampleFiles, forceManualPatternStep);
+        var window = new LogTypeEditorWindow(editorViewModel) { Owner = this };
+
+        window.DeleteRequested += () =>
         {
             window.Close();
-            if (existingCard is not null)
-                await _viewModel.RemoveSourceAsync(existingCard);
+            logTypesViewModel.DeleteCommand.Execute(logType);
         };
 
         bool? finished = window.ShowDialog();
-
         if (finished == true)
         {
-            var resultSource = wizardViewModel.BuildResult();
-            _ = _viewModel.ApplyWizardResultAsync(existingCard, resultSource);
+            var result = editorViewModel.BuildResult();
+            logTypesViewModel.ApplyEditorResult(logType, result);
         }
+    }
+
+    // ===================================================================
+    // Parse Warnings
+    // ===================================================================
+
+    /// <summary>Opens the Parse Warnings list. A chip's error badge passes its own binding/
+    /// LogType to filter the list down to just that chip; the status bar's counter passes null
+    /// for both to show everything. Not live-bound - it's a snapshot of Warnings at the moment
+    /// this opens, with its own Refresh button, so a long sync running in the background can't
+    /// yank rows out from under someone reading them.</summary>
+    private void OnViewWarningsRequested(SourceLogType? filterBinding, LogType? filterLogType)
+    {
+        // Re-clicking a badge (or the status bar counter) while the window is already open
+        // replaces its contents with a fresh snapshot for the new filter, rather than piling up
+        // a new non-modal window per click.
+        _warningsWindow?.Close();
+
+        var sources = _viewModel.Sources.Select(c => c.Source).ToList();
+        var warningsViewModel = new WarningsViewModel(_viewModel.Warnings, sources, _viewModel.LogTypes, filterBinding, filterLogType);
+
+        _warningsWindow = new WarningsWindow(warningsViewModel) { Owner = this };
+        _warningsWindow.Closed += (_, _) => _warningsWindow = null;
+        _warningsWindow.Show();
     }
 }

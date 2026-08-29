@@ -14,13 +14,19 @@ using Microsoft.Win32;
 namespace LogAggregator.ViewModels;
 
 /// <summary>
-/// Orchestrates sources, config persistence, and the SQL-backed display window. Rows are never
-/// all held in memory at once - DisplayedBlocks is a bounded sliding window (see MaxLoadedRows)
-/// fed by paged queries against LogDatabase. This is the change that actually fixes the 36
-/// million row memory problem; everything upstream of this class (ingestion) already writes
-/// straight to SQLite rather than building an in-memory list.
+/// Orchestrates sources, LogTypes, config persistence, and the SQL-backed display window. Rows
+/// are never all held in memory at once - DisplayedBlocks is a bounded sliding window (see
+/// MaxLoadedRows) fed by paged queries against LogDatabase.
 ///
-/// Known limitation of this v1 windowing model: scrolling loads more rows going *forward*
+/// A Source no longer owns a format/timestamp/file-list directly - it's just a named group of
+/// LogType bindings (see LogSource/SourceLogType/LogType), so there's no wizard for creating or
+/// editing a Source anymore: "+Add Source" makes a blank card immediately, renaming happens
+/// inline on the card, and files are attached to specific LogType bindings by dropping onto a
+/// chip (or the card, which asks which LogType) - all handled by SourceCardViewModel. LogTypes
+/// themselves (the reusable "how do I parse this kind of log" definitions) are what still need a
+/// dedicated editor, opened from "Manage Log Types" (see LogTypesWindow/LogTypeEditorWindow).
+///
+/// Known limitation of this v1 windowing model: scrolling loads more rows going forward
 /// (appending as you approach the bottom of what's loaded, trimming from the front once the
 /// window exceeds its cap), but there's no symmetric "load more going backward" - if you jump
 /// to the end and want to scroll back up past what's still loaded, use "Jump to Start" rather
@@ -62,6 +68,10 @@ public class MainViewModel : ObservableObject
     private bool _isLoadingMore;
 
     public ObservableCollection<SourceCardViewModel> Sources { get; } = new();
+
+    /// <summary>Every defined LogType, shared by reference with every SourceCardViewModel (for
+    /// chip lookups/the card-level drop picker) and with LogTypesViewModel (for management).</summary>
+    public ObservableCollection<LogType> LogTypes { get; } = new();
 
     /// <summary>The sliding window of currently-displayed rows. Bound directly to the
     /// DataGrid's ItemsSource - never contains more than MaxLoadedRows items.</summary>
@@ -119,6 +129,20 @@ public class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>Which color drives each row's background tint in the main grid - LogType color
+    /// (default), Source color, or none. Bound to 3 radio buttons in the Settings popup.</summary>
+    public LogLineColorMode LogLineColorMode
+    {
+        get => _settings.LogLineColorMode;
+        set
+        {
+            if (_settings.LogLineColorMode == value) return;
+            _settings.LogLineColorMode = value;
+            OnPropertyChanged();
+            _ = SaveConfigAsync();
+        }
+    }
+
     public string ToastMessage { get => _toastMessage; private set => SetProperty(ref _toastMessage, value); }
     public bool ToastVisible { get => _toastVisible; private set => SetProperty(ref _toastVisible, value); }
 
@@ -138,6 +162,7 @@ public class MainViewModel : ObservableObject
     public bool AnySourceSyncing => Sources.Any(s => s.Source.IsSyncing);
 
     public ICommand AddSourceCommand { get; }
+    public ICommand OpenLogTypesCommand { get; }
     public ICommand TogglePanelCommand { get; }
     public ICommand ApplyFiltersCommand { get; }
     public ICommand ClearFiltersCommand { get; }
@@ -147,14 +172,33 @@ public class MainViewModel : ObservableObject
     public AsyncRelayCommand JumpToEndCommand { get; }
     public AsyncRelayCommand LoadMoreCommand { get; }
 
-    /// <summary>Requests the wizard be opened. Null card = create new source; non-null = edit.</summary>
-    public event Action<SourceCardViewModel?>? WizardRequested;
+    /// <summary>Opens the full Parse Warnings list, unfiltered - bound to the status bar's
+    /// warning counter ("N parse warning(s)").</summary>
+    public ICommand ViewAllWarningsCommand { get; }
+
+    /// <summary>Requests the "Manage Log Types" window be opened.</summary>
+    public event Action? LogTypesRequested;
+
+    /// <summary>Bubbled up from a card's own NewLogTypeRequestedForDrop - the owner (MainWindow)
+    /// opens the LogType editor pre-seeded with the dropped sample file(s), then calls
+    /// <see cref="CompleteNewLogTypeDrop"/> with the built result.</summary>
+    public event Action<SourceCardViewModel, List<string>>? NewLogTypeRequestedForDrop;
+
+    /// <summary>Bubbled up from a card's own LogTypeSettingsRequested (a chip's right-click
+    /// menu) - the owner (MainWindow) opens the LogType editor directly for that LogType.</summary>
+    public event Action<SourceLogType, LogType, bool>? LogTypeSettingsRequested;
+
+    /// <summary>Bubbled up from a card's own ViewWarningsRequested (a chip's error badge) - the
+    /// owner (MainWindow) opens the Parse Warnings window filtered to that binding. Both
+    /// arguments null means "view all" (from the status bar counter, not a specific chip).</summary>
+    public event Action<SourceLogType?, LogType?>? ViewWarningsRequested;
 
     public MainViewModel(LogDatabase database)
     {
         _database = database;
 
-        AddSourceCommand = new RelayCommand(() => WizardRequested?.Invoke(null));
+        AddSourceCommand = new RelayCommand(AddBlankSource);
+        OpenLogTypesCommand = new RelayCommand(() => LogTypesRequested?.Invoke());
         TogglePanelCommand = new RelayCommand(() => IsPanelCollapsed = !IsPanelCollapsed);
         ApplyFiltersCommand = new AsyncRelayCommand(ApplyFiltersAsync, () => !AnySourceSyncing);
         ClearFiltersCommand = new AsyncRelayCommand(ClearFiltersAsync);
@@ -163,6 +207,7 @@ public class MainViewModel : ObservableObject
         JumpToStartCommand = new AsyncRelayCommand(ReloadFirstPageAsync);
         JumpToEndCommand = new AsyncRelayCommand(JumpToEndAsync);
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
+        ViewAllWarningsCommand = new RelayCommand(() => ViewWarningsRequested?.Invoke(null, null));
     }
 
     public async Task InitializeAsync()
@@ -170,17 +215,21 @@ public class MainViewModel : ObservableObject
         var config = await _configService.LoadAsync().ConfigureAwait(true);
         _settings = config.Settings ?? new AppSettings();
         OnPropertyChanged(nameof(ShowDropZone));
+        OnPropertyChanged(nameof(LogLineColorMode));
+
+        LogTypes.Clear();
+        foreach (var logType in config.LogTypes) LogTypes.Add(logType);
 
         foreach (var source in config.Sources)
             AddSourceCardInternal(source);
 
         UpdateAllActiveState();
 
-        // Data already persists in SQLite across restarts, so - unlike the old in-memory
-        // design - we do NOT automatically re-parse every source's files on every startup.
-        // Just read back the counts already sitting in the database.
+        // Data already persists in SQLite across restarts, so we do NOT automatically re-parse
+        // every binding's files on every startup - just read back the counts already sitting in
+        // the database.
         foreach (var card in Sources)
-            card.Source.ParsedBlockCount = (int)Math.Min(_database.CountForSource(card.Source.Id), int.MaxValue);
+            card.RefreshCountsFromDatabase();
 
         await RefreshGrandTotalAsync().ConfigureAwait(true);
         await ReloadFirstPageAsync().ConfigureAwait(true);
@@ -188,11 +237,15 @@ public class MainViewModel : ObservableObject
 
     private void AddSourceCardInternal(LogSource source)
     {
-        var card = new SourceCardViewModel(source, _database);
+        var card = new SourceCardViewModel(source, _database, LogTypes);
         card.SyncCompleted += OnSyncCompleted;
         card.SyncCancelled += OnSyncCancelled;
         card.ConfigChanged += () => _ = SaveConfigAsync();
-        card.EditRequested += c => WizardRequested?.Invoke(c);
+        card.RemoveRequested += c => _ = RemoveSourceAsync(c);
+        card.ToastRequested += msg => ShowToast(msg);
+        card.NewLogTypeRequestedForDrop += (c, paths) => NewLogTypeRequestedForDrop?.Invoke(c, paths);
+        card.LogTypeSettingsRequested += (binding, logType, forceManual) => LogTypeSettingsRequested?.Invoke(binding, logType, forceManual);
+        card.ViewWarningsRequested += (binding, logType) => ViewWarningsRequested?.Invoke(binding, logType);
 
         source.PropertyChanged += (_, e) =>
         {
@@ -212,37 +265,37 @@ public class MainViewModel : ObservableObject
         _sourceLookup[source.Id] = card;
     }
 
-    /// <summary>Called by the wizard flow (via MainWindow) when the user finishes creating or
-    /// editing a source. For a new source, <paramref name="existingCard"/> is null.</summary>
-    public async Task ApplyWizardResultAsync(SourceCardViewModel? existingCard, LogSource resultSource)
+    private void AddBlankSource()
     {
-        SourceCardViewModel card;
+        var baseName = "New Source";
+        var name = baseName;
+        int suffix = 2;
+        while (Sources.Any(s => string.Equals(s.Source.Name, name, StringComparison.OrdinalIgnoreCase)))
+            name = $"{baseName} {suffix++}";
 
-        if (existingCard is null)
+        var source = new LogSource
         {
-            AddSourceCardInternal(resultSource);
-            card = Sources.Last();
-        }
-        else
-        {
-            existingCard.Source.Name = resultSource.Name;
-            existingCard.Source.Type = resultSource.Type;
-            existingCard.Source.TimestampProfile = resultSource.TimestampProfile;
-            existingCard.Source.DisplayColor = resultSource.DisplayColor;
-            existingCard.Source.FilePaths = resultSource.FilePaths;
-            existingCard.Source.RefreshComputedState();
-            card = existingCard;
-        }
+            Name = name,
+            DisplayColor = ColorPresets.NextColor(),
+            IsActive = true
+        };
 
+        AddSourceCardInternal(source);
+        _ = SaveConfigAsync();
+    }
+
+    /// <summary>Called by MainWindow once the user finishes the "+ New Log Type..." quick-create
+    /// flow triggered by a card-level drop that didn't match any existing LogType.</summary>
+    public async Task CompleteNewLogTypeDropAsync(SourceCardViewModel card, LogType newLogType)
+    {
+        LogTypes.Add(newLogType);
+        card.CompleteNewLogTypeDrop(newLogType);
         await SaveConfigAsync().ConfigureAwait(true);
-
-        if (card.Source.HasFiles)
-            await card.SyncAsync().ConfigureAwait(true);
     }
 
     public async Task RemoveSourceAsync(SourceCardViewModel card)
     {
-        card.Source.CurrentCts?.Cancel();
+        foreach (var binding in card.Source.LogTypes) binding.CurrentCts?.Cancel();
         await Task.Run(() => _database.DeleteBlocksForSource(card.Source.Id)).ConfigureAwait(true);
 
         Sources.Remove(card);
@@ -254,15 +307,21 @@ public class MainViewModel : ObservableObject
         await SaveConfigAsync().ConfigureAwait(true);
     }
 
-    private async void OnSyncCompleted(SourceCardViewModel card, SourceIngestionResult result)
+    private async void OnSyncCompleted(SourceCardViewModel card, SourceLogType binding, SourceIngestionResult result)
     {
+        // A re-sync (re-drop, cancel+retry, pattern change) re-ingests this exact binding from
+        // scratch, so its previous warnings are stale - drop them before appending the fresh
+        // batch, or the global list (and the Parse Warnings window) would double up every time
+        // the same file gets re-synced.
+        var stale = Warnings.Where(w => w.SourceId == card.Source.Id && w.LogTypeId == binding.LogTypeId).ToList();
+        foreach (var w in stale) Warnings.Remove(w);
         foreach (var warning in result.Warnings) Warnings.Add(warning);
         await RefreshGrandTotalAsync().ConfigureAwait(true);
         await ReloadFirstPageAsync().ConfigureAwait(true);
         CommandManager.InvalidateRequerySuggested();
     }
 
-    private async void OnSyncCancelled(SourceCardViewModel card)
+    private async void OnSyncCancelled(SourceCardViewModel card, SourceLogType binding)
     {
         await RefreshGrandTotalAsync().ConfigureAwait(true);
         await ReloadFirstPageAsync().ConfigureAwait(true);
@@ -417,7 +476,10 @@ public class MainViewModel : ObservableObject
     }
 
     // ===================================================================
-    // Quick-add drop zone
+    // Quick-add drop zone: creates a brand-new Source *and* a matching LogType in one step,
+    // when auto-detection is confident. Ambiguous/failed detection asks the user to use
+    // "Manage Log Types" instead, where the full editor (with the interactive region picker)
+    // can help pin down the pattern.
     // ===================================================================
 
     public async Task QuickAddSourceFromDropAsync(IEnumerable<string> rawPaths)
@@ -436,31 +498,47 @@ public class MainViewModel : ObservableObject
 
         if (detection.Status != DetectionStatus.Confident)
         {
-            ShowToast("Couldn't auto-detect this confidently - use \"+ Add Source\" instead so you can review it.", TimeSpan.FromSeconds(6));
+            ShowToast("Couldn't auto-detect this confidently - use \"Manage Log Types\" instead so you can review it.", TimeSpan.FromSeconds(6));
             return;
         }
 
         var baseName = System.IO.Path.GetFileNameWithoutExtension(expanded[0]).Replace('_', ' ').Replace('-', ' ');
-        var name = baseName;
-        int suffix = 2;
-        while (Sources.Any(s => string.Equals(s.Source.Name, name, StringComparison.OrdinalIgnoreCase)))
-            name = $"{baseName} ({suffix++})";
 
+        var logTypeName = baseName;
+        int logTypeSuffix = 2;
+        while (LogTypes.Any(lt => string.Equals(lt.Name, logTypeName, StringComparison.OrdinalIgnoreCase)))
+            logTypeName = $"{baseName} ({logTypeSuffix++})";
+
+        var logType = new LogType
+        {
+            Name = logTypeName,
+            Format = fileType,
+            TimestampProfile = detection.Candidates[0].Profile ?? new TimestampProfile(),
+            ColorHex = ColorPresets.NextColor(),
+            DisplayMode = LogTypeDisplayMode.Both
+        };
+        LogTypes.Add(logType);
+
+        var sourceName = baseName;
+        int sourceSuffix = 2;
+        while (Sources.Any(s => string.Equals(s.Source.Name, sourceName, StringComparison.OrdinalIgnoreCase)))
+            sourceName = $"{baseName} ({sourceSuffix++})";
+
+        var binding = new SourceLogType { LogTypeId = logType.Id, FilePaths = expanded };
         var source = new LogSource
         {
-            Name = name,
-            Type = fileType,
-            TimestampProfile = detection.Candidates[0].Profile,
-            DisplayColor = WizardViewModel.PresetColors[Sources.Count % WizardViewModel.PresetColors.Length],
-            FilePaths = expanded,
-            IsActive = true
+            Name = sourceName,
+            DisplayColor = ColorPresets.NextColor(),
+            IsActive = true,
+            LogTypes = { binding }
         };
 
         AddSourceCardInternal(source);
         await SaveConfigAsync().ConfigureAwait(true);
-        ShowToast($"Added \"{name}\" from {expanded.Count} file(s) and started syncing.");
+        ShowToast($"Added \"{sourceName}\" ({logTypeName}) from {expanded.Count} file(s) and started syncing.");
 
-        await Sources.Last().SyncAsync().ConfigureAwait(true);
+        var card = Sources.Last();
+        await card.SyncBindingAsync(binding, logType).ConfigureAwait(true);
     }
 
     // ===================================================================
@@ -494,9 +572,18 @@ public class MainViewModel : ObservableObject
             "Export complete", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private async Task SaveConfigAsync()
+    /// <summary>Public so external owners of the shared Sources/LogTypes collections (e.g.
+    /// LogTypesViewModel, whose edits mutate those collections/objects in place rather than
+    /// going through a result object) can trigger a persist without MainWindow needing its own
+    /// copy of this logic.</summary>
+    public async Task SaveConfigAsync()
     {
-        var config = new AppConfig { Sources = Sources.Select(c => c.Source).ToList(), Settings = _settings };
+        var config = new AppConfig
+        {
+            Sources = Sources.Select(c => c.Source).ToList(),
+            LogTypes = LogTypes.ToList(),
+            Settings = _settings
+        };
         await _configService.SaveAsync(config).ConfigureAwait(true);
     }
 }

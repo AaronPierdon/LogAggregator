@@ -2,7 +2,9 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:vm="clr-namespace:LogAggregator.ViewModels"
                     xmlns:models="clr-namespace:LogAggregator.Models"
-                    xmlns:conv="clr-namespace:LogAggregator.Converters">
+                    xmlns:conv="clr-namespace:LogAggregator.Converters"
+                    xmlns:common="clr-namespace:LogAggregator.Common"
+                    xmlns:views="clr-namespace:LogAggregator.Views">
     <ResourceDictionary.MergedDictionaries>
         <ResourceDictionary Source="../Themes/Brushes.xaml"/>
         <ResourceDictionary Source="../Themes/Controls.xaml"/>
@@ -13,120 +15,296 @@
     <conv:BoolToVisibilityConverter x:Key="Card.InverseBoolToVis" Invert="True"/>
     <conv:HexToBrushConverter x:Key="Card.HexToBrush"/>
     <conv:CardStateToBorderBrushConverter x:Key="Card.StateToBorder"/>
+    <conv:CountToSummaryConverter x:Key="Card.CountToSummary"/>
+
+    <!-- Small round toggle used for the gear (settings) button, matching Style.IconButton's look
+         but as a ToggleButton so it can drive a Popup's IsOpen. -->
+    <Style x:Key="Card.GearToggle" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Width" Value="30"/>
+        <Setter Property="Height" Value="30"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="15">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource Brush.SurfaceHover}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource Brush.SurfaceHover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- One row-item button in the card-level LogType picker popup (existing LogTypes list). -->
+    <Style x:Key="Card.LogTypePickerRow" TargetType="Button">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="4"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{StaticResource Brush.SurfaceHover}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 
     <DataTemplate x:Key="SourceCardTemplate" DataType="{x:Type vm:SourceCardViewModel}">
-        <Border Style="{StaticResource Style.Card}" Padding="12">
+        <Border x:Name="CardRoot" Padding="12"
+                common:DragDropBehavior.DropCommand="{Binding CardDropCommand}"
+                RenderTransformOrigin="0.5,0.5">
+            <Border.RenderTransform>
+                <ScaleTransform/>
+            </Border.RenderTransform>
             <Border.BorderBrush>
                 <Binding Path="Source.CardState" Converter="{StaticResource Card.StateToBorder}"/>
             </Border.BorderBrush>
-            <Grid>
-                <!-- Main card content -->
-                <StackPanel>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding common:DragDropBehavior.IsDragOver, RelativeSource={RelativeSource Self}}" Value="True">
+                            <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentGreen}"/>
+                            <Setter Property="BorderThickness" Value="2"/>
+                            <DataTrigger.EnterActions>
+                                <BeginStoryboard x:Name="DragPulseBeginCard" Storyboard="{StaticResource Storyboard.DragPulse}"/>
+                            </DataTrigger.EnterActions>
+                            <DataTrigger.ExitActions>
+                                <StopStoryboard BeginStoryboardName="DragPulseBeginCard"/>
+                            </DataTrigger.ExitActions>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
 
-                        <CheckBox Grid.Column="0" Style="{StaticResource Style.DarkCheckBox}"
-                                  IsChecked="{Binding Source.IsActive}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <StackPanel>
+                <!-- ================= Header: active checkbox, color, name, gear ================= -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                        <!-- Color swatch + popup picker -->
-                        <ToggleButton x:Name="ColorToggle" Grid.Column="1" Width="20" Height="20" Margin="0,0,8,0"
-                                      VerticalAlignment="Center" Cursor="Hand" ToolTip="Change color">
-                            <ToggleButton.Template>
-                                <ControlTemplate TargetType="ToggleButton">
-                                    <Border CornerRadius="10" BorderThickness="1.4"
-                                            BorderBrush="{StaticResource Brush.Border}"
-                                            Background="{Binding Source.DisplayColor, Converter={StaticResource Card.HexToBrush}}"/>
-                                </ControlTemplate>
-                            </ToggleButton.Template>
-                        </ToggleButton>
-                        <Popup PlacementTarget="{Binding ElementName=ColorToggle}" IsOpen="{Binding IsChecked, ElementName=ColorToggle}"
-                               StaysOpen="False" Placement="Bottom" AllowsTransparency="True">
-                            <Border Background="{StaticResource Brush.SurfaceRaised}" BorderBrush="{StaticResource Brush.Border}"
-                                    BorderThickness="1" CornerRadius="6" Padding="8">
-                                <ItemsControl ItemsSource="{Binding PresetColors}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel Width="140"/>
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Button Width="22" Height="22" Margin="3" Cursor="Hand"
-                                                    Command="{Binding DataContext.SetColorCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                    CommandParameter="{Binding}">
-                                                <Button.Template>
-                                                    <ControlTemplate TargetType="Button">
-                                                        <Border CornerRadius="11"
-                                                                Background="{Binding Converter={StaticResource Card.HexToBrush}}"/>
-                                                    </ControlTemplate>
-                                                </Button.Template>
-                                            </Button>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </Border>
-                        </Popup>
+                    <CheckBox Grid.Column="0" Style="{StaticResource Style.DarkCheckBox}"
+                              IsChecked="{Binding Source.IsActive}" VerticalAlignment="Center" Margin="0,0,8,0"/>
 
-                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding Source.Name}" Style="{StaticResource Style.CardTitle}"/>
+                    <!-- Color swatch + preset popup (still used for the Source-level DisplayColor,
+                         shown when "Log line coloring" = Source, and as the collapsed-rail wedge
+                         fallback for a card with no LogTypes bound yet). -->
+                    <ToggleButton x:Name="ColorToggle" Grid.Column="1" Width="20" Height="20" Margin="0,0,8,0"
+                                  VerticalAlignment="Center" Cursor="Hand" ToolTip="Change source color">
+                        <ToggleButton.Template>
+                            <ControlTemplate TargetType="ToggleButton">
+                                <Border CornerRadius="10" BorderThickness="1.4"
+                                        BorderBrush="{StaticResource Brush.Border}"
+                                        Background="{Binding Source.DisplayColor, Converter={StaticResource Card.HexToBrush}}"/>
+                            </ControlTemplate>
+                        </ToggleButton.Template>
+                    </ToggleButton>
+                    <Popup PlacementTarget="{Binding ElementName=ColorToggle}" IsOpen="{Binding IsChecked, ElementName=ColorToggle}"
+                           StaysOpen="False" Placement="Bottom" AllowsTransparency="True">
+                        <Border Background="{StaticResource Brush.SurfaceRaised}" BorderBrush="{StaticResource Brush.Border}"
+                                BorderThickness="1" CornerRadius="6" Padding="8">
+                            <ItemsControl ItemsSource="{Binding PresetColors}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Width="140"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Width="22" Height="22" Margin="3" Cursor="Hand"
+                                                Command="{Binding DataContext.SetColorCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border CornerRadius="11"
+                                                            Background="{Binding Converter={StaticResource Card.HexToBrush}}"/>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
+                    </Popup>
+
+                    <!-- Name: TextBlock (double-click to rename) or inline TextBox while editing. -->
+                    <Grid Grid.Column="2" VerticalAlignment="Center">
+                        <StackPanel Visibility="{Binding IsEditingName, Converter={StaticResource Card.InverseBoolToVis}}">
+                            <TextBlock Text="{Binding Source.Name}" Style="{StaticResource Style.CardTitle}"
+                                       Cursor="Hand" ToolTip="Double-click to rename">
+                                <TextBlock.InputBindings>
+                                    <MouseBinding MouseAction="LeftDoubleClick" Command="{Binding BeginRenameCommand}"/>
+                                </TextBlock.InputBindings>
+                            </TextBlock>
                             <TextBlock Style="{StaticResource Style.CardSubtext}">
                                 <TextBlock.Text>
-                                    <MultiBinding StringFormat="{}{0} · {1} file(s) · {2:N0} block(s)">
-                                        <Binding Path="Source.Type"/>
-                                        <Binding Path="Source.FilePaths.Count"/>
+                                    <MultiBinding StringFormat="{}{0} log type(s) · {1:N0} block(s)">
+                                        <Binding Path="Source.LogTypes.Count"/>
                                         <Binding Path="Source.ParsedBlockCount"/>
                                     </MultiBinding>
                                 </TextBlock.Text>
                             </TextBlock>
                         </StackPanel>
 
-                        <Button Grid.Column="3" Style="{StaticResource Style.IconButton}"
-                                Command="{Binding SettingsCommand}" ToolTip="Edit source">
-                            <Path Width="14" Height="14" Stretch="Uniform" Fill="{StaticResource Brush.TextSecondary}"
-                                  Data="M9,2 L11,2 L11.4,4.1 C12.1,4.3 12.8,4.7 13.4,5.1 L15.3,4.2 L16.3,6 L14.7,7.3
-                                        C14.8,7.9 14.8,8.5 14.7,9.1 L16.3,10.4 L15.3,12.2 L13.4,11.3
-                                        C12.8,11.7 12.1,12.1 11.4,12.3 L11,14.4 L9,14.4 L8.6,12.3
-                                        C7.9,12.1 7.2,11.7 6.6,11.3 L4.7,12.2 L3.7,10.4 L5.3,9.1
-                                        C5.2,8.5 5.2,7.9 5.3,7.3 L3.7,6 L4.7,4.2 L6.6,5.1
-                                        C7.2,4.7 7.9,4.3 8.6,4.1 Z M10,6.2 A2.3,2.3 0 1 0 10,10.8 A2.3,2.3 0 1 0 10,6.2 Z"/>
-                        </Button>
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding IsEditingName, Converter={StaticResource Card.BoolToVis}}">
+                            <TextBox x:Name="NameEditBox" Style="{StaticResource Style.DarkTextBox}" Width="140"
+                                     Text="{Binding EditingName, UpdateSourceTrigger=PropertyChanged}"
+                                     FontSize="13" Padding="4,3">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Enter" Command="{Binding CommitRenameCommand}"/>
+                                    <KeyBinding Key="Escape" Command="{Binding CancelRenameCommand}"/>
+                                </TextBox.InputBindings>
+                            </TextBox>
+                            <Button Style="{StaticResource Style.IconButton}" Width="24" Height="24" Margin="4,0,0,0"
+                                    Command="{Binding CommitRenameCommand}" ToolTip="Save">
+                                <Path Width="11" Height="11" Stretch="Uniform" Stroke="{StaticResource Brush.AccentGreen}"
+                                      StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" Data="M 1,6 L 5,10 L 13,1"/>
+                            </Button>
+                        </StackPanel>
                     </Grid>
 
-                    <Button Content="Import files..." Style="{StaticResource Style.SecondaryButton}"
-                            Command="{Binding ImportCommand}" Margin="0,10,0,0" HorizontalAlignment="Stretch" FontSize="12"/>
-                </StackPanel>
+                    <!-- Gear: opens a small popup with "Add files..." and "Remove source". -->
+                    <ToggleButton x:Name="GearToggle" Grid.Column="3" Style="{StaticResource Card.GearToggle}"
+                                  ToolTip="Source options">
+                        <Path Width="14" Height="14" Stretch="Uniform" Fill="{StaticResource Brush.TextSecondary}"
+                              Data="M9,2 L11,2 L11.4,4.1 C12.1,4.3 12.8,4.7 13.4,5.1 L15.3,4.2 L16.3,6 L14.7,7.3
+                                    C14.8,7.9 14.8,8.5 14.7,9.1 L16.3,10.4 L15.3,12.2 L13.4,11.3
+                                    C12.8,11.7 12.1,12.1 11.4,12.3 L11,14.4 L9,14.4 L8.6,12.3
+                                    C7.9,12.1 7.2,11.7 6.6,11.3 L4.7,12.2 L3.7,10.4 L5.3,9.1
+                                    C5.2,8.5 5.2,7.9 5.3,7.3 L3.7,6 L4.7,4.2 L6.6,5.1
+                                    C7.2,4.7 7.9,4.3 8.6,4.1 Z M10,6.2 A2.3,2.3 0 1 0 10,10.8 A2.3,2.3 0 1 0 10,6.2 Z"/>
+                    </ToggleButton>
+                    <Popup Grid.Column="3" PlacementTarget="{Binding ElementName=GearToggle}"
+                           IsOpen="{Binding IsChecked, ElementName=GearToggle}"
+                           StaysOpen="False" Placement="Bottom" AllowsTransparency="True">
+                        <Border Background="{StaticResource Brush.SurfaceRaised}" BorderBrush="{StaticResource Brush.Border}"
+                                BorderThickness="1" CornerRadius="6" Padding="6" MinWidth="160">
+                            <StackPanel>
+                                <Button Content="Add files..." Style="{StaticResource Card.LogTypePickerRow}"
+                                        HorizontalContentAlignment="Left" Command="{Binding AddFilesCommand}"/>
+                                <Border Height="1" Background="{StaticResource Brush.BorderSubtle}" Margin="4,4"/>
+                                <Button Content="Remove source" Style="{StaticResource Card.LogTypePickerRow}"
+                                        HorizontalContentAlignment="Left" Foreground="{StaticResource Brush.Error}"
+                                        Command="{Binding RemoveSourceCommand}"/>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
+                </Grid>
 
-                <!-- Syncing overlay -->
-                <Border Background="#CC161920" CornerRadius="8"
-                        Visibility="{Binding Source.IsSyncing, Converter={StaticResource Card.BoolToVis}}"
-                        Cursor="Hand">
-                    <Border.InputBindings>
-                        <MouseBinding MouseAction="LeftClick" Command="{Binding CancelSyncCommand}"/>
-                    </Border.InputBindings>
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Path x:Name="Spinner" Width="26" Height="26" Stretch="Uniform"
-                              Data="M13,2 A11,11 0 1 1 4,6" Stroke="{StaticResource Brush.AccentGreen}"
-                              StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                              RenderTransformOrigin="0.5,0.5">
-                            <Path.RenderTransform>
-                                <RotateTransform/>
-                            </Path.RenderTransform>
-                            <Path.Triggers>
-                                <EventTrigger RoutedEvent="Loaded">
-                                    <BeginStoryboard Storyboard="{StaticResource Storyboard.SpinForever}"/>
-                                </EventTrigger>
-                            </Path.Triggers>
-                        </Path>
-                        <TextBlock Text="Syncing… click to cancel" Foreground="{StaticResource Brush.TextSecondary}"
-                                   FontSize="10.5" Margin="0,8,0,0" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
-            </Grid>
+                <!-- ================= LogType chips ================= -->
+                <ItemsControl ItemsSource="{Binding VisibleChips}" Margin="0,10,0,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:LogTypeChipViewModel}">
+                            <views:LogTypeChip Margin="0,0,8,6"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- "+N more" overflow toggle - shown instead of letting the chip row grow
+                     indefinitely once a card has more than a handful of bound LogTypes. -->
+                <!-- IsChecked is bound TwoWay directly to IsOverflowExpanded (not via
+                     ToggleOverflowCommand) - the command exists for any other caller that wants
+                     to flip this without going through a ToggleButton, but wiring both here
+                     would double-toggle the value on every click. -->
+                <ToggleButton IsChecked="{Binding IsOverflowExpanded, Mode=TwoWay}" Cursor="Hand"
+                              Visibility="{Binding HasOverflow, Converter={StaticResource Card.BoolToVis}}"
+                              HorizontalAlignment="Left" Margin="0,2,0,0">
+                    <ToggleButton.Template>
+                        <ControlTemplate TargetType="ToggleButton">
+                            <Border Background="{StaticResource Brush.SurfaceHover}" CornerRadius="10" Padding="8,3">
+                                <TextBlock FontSize="11" Foreground="{StaticResource Brush.TextSecondary}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="{Binding OverflowCount, StringFormat='+{0} more'}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsOverflowExpanded}" Value="True">
+                                                    <Setter Property="Text" Value="Show less"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Border>
+                        </ControlTemplate>
+                    </ToggleButton.Template>
+                </ToggleButton>
+
+                <!-- ================= Add files ================= -->
+                <Button Content="Add files..." Style="{StaticResource Style.SecondaryButton}"
+                        Command="{Binding AddFilesCommand}" Margin="0,10,0,0" HorizontalAlignment="Stretch" FontSize="12"/>
+
+                <!-- ================= Card-level drop: "which LogType?" popup ================= -->
+                <!-- Opened by SourceCardViewModel.HandleDropOnCard when a drop lands on the card
+                     but not on any specific chip - lists every defined LogType (pick one to bind
+                     it, or create a fresh binding if it's already bound) plus a quick "+ New Log
+                     Type..." entry that hands off to the full LogType editor pre-seeded with the
+                     dropped files (see MainWindow.xaml.cs's NewLogTypeRequestedForDrop handler). -->
+                <Popup PlacementTarget="{Binding ElementName=CardRoot}" IsOpen="{Binding IsLogTypePickerOpen, Mode=TwoWay}"
+                       StaysOpen="False" Placement="Center" AllowsTransparency="True">
+                    <Border Background="{StaticResource Brush.SurfaceRaised}" BorderBrush="{StaticResource Brush.Border}"
+                            BorderThickness="1" CornerRadius="6" Padding="8" MinWidth="220" MaxHeight="320">
+                        <StackPanel>
+                            <TextBlock Text="Which log type is this?" Style="{StaticResource Style.SectionHeader}" Margin="4,2,4,6"/>
+                            <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding AllLogTypes}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type models:LogType}">
+                                            <Button Style="{StaticResource Card.LogTypePickerRow}"
+                                                    HorizontalContentAlignment="Stretch"
+                                                    Command="{Binding DataContext.PickExistingLogTypeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Border Width="14" Height="14" CornerRadius="7" Margin="0,0,8,0"
+                                                            Background="{Binding ColorHex, Converter={StaticResource Card.HexToBrush}}"/>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource Brush.TextPrimary}" FontSize="12.5"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                            <Border Height="1" Background="{StaticResource Brush.BorderSubtle}" Margin="4,6"/>
+                            <Button Content="+ New Log Type..." Style="{StaticResource Card.LogTypePickerRow}"
+                                    HorizontalContentAlignment="Left" Foreground="{StaticResource Brush.AccentGreen}"
+                                    Command="{Binding RequestNewLogTypeCommand}"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+            </StackPanel>
+
+            <Border.ToolTip>
+                <ToolTip Content="Drop files onto a specific LogType icon above to load them straight into it, or drop anywhere else on the card to be asked which LogType they belong to."
+                         MaxWidth="280"/>
+            </Border.ToolTip>
         </Border>
     </DataTemplate>
 

@@ -31,6 +31,8 @@
             <conv:CardStateToBorderBrushConverter x:Key="CardStateToBorderBrush"/>
             <conv:CountToSummaryConverter x:Key="CountToSummary"/>
             <conv:CountToVisibilityConverter x:Key="CountToVis"/>
+            <conv:EnumToBoolConverter x:Key="EnumToBool"/>
+            <conv:PieWedgeGeometryConverter x:Key="PieWedgeGeometry"/>
         </ResourceDictionary>
     </Window.Resources>
 
@@ -71,6 +73,14 @@
                             <TextBlock Text="INTERFACE" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,8"/>
                             <CheckBox Content="Show drag &amp; drop quick-add area" Style="{StaticResource Style.DarkCheckBox}"
                                       IsChecked="{Binding ShowDropZone}"/>
+
+                            <TextBlock Text="LOG LINE COLORING" Style="{StaticResource Style.SectionHeader}" Margin="0,16,0,8"/>
+                            <RadioButton Content="By log type" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,4"
+                                         IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=LogType}"/>
+                            <RadioButton Content="By source" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,4"
+                                         IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=Source}"/>
+                            <RadioButton Content="No coloring" Style="{StaticResource Style.DarkRadioButton}"
+                                         IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=None}"/>
                         </StackPanel>
                     </Border>
                 </Popup>
@@ -134,13 +144,17 @@
                                   Data="M3,3 L3,17 M7,3 L17,3 L17,17 L7,17 M9,7 L14,10 L9,13 Z"/>
                         </Button>
 
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                        <StackPanel Grid.Column="1" HorizontalAlignment="Right"
                                     Visibility="{Binding IsPanelCollapsed, Converter={StaticResource InverseBoolToVis}}">
-                            <CheckBox Style="{StaticResource Style.DarkCheckBox}" Margin="0,0,10,0"
-                                      VerticalAlignment="Center" ToolTip="Add / remove all sources"
-                                      IsChecked="{Binding AllActive}" IsThreeState="True"/>
-                            <Button Content="+ Add Source" Style="{StaticResource Style.PrimaryButton}"
-                                    Command="{Binding AddSourceCommand}" FontSize="12"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6">
+                                <CheckBox Style="{StaticResource Style.DarkCheckBox}" Margin="0,0,10,0"
+                                          VerticalAlignment="Center" ToolTip="Add / remove all sources"
+                                          IsChecked="{Binding AllActive}" IsThreeState="True"/>
+                                <Button Content="+ Add Source" Style="{StaticResource Style.PrimaryButton}"
+                                        Command="{Binding AddSourceCommand}" FontSize="12"/>
+                            </StackPanel>
+                            <Button Content="Manage Log Types" Style="{StaticResource Style.SecondaryButton}"
+                                    Command="{Binding OpenLogTypesCommand}" FontSize="12" HorizontalAlignment="Right"/>
                         </StackPanel>
                     </Grid>
 
@@ -157,7 +171,10 @@
                         </ItemsControl>
                     </ScrollViewer>
 
-                    <!-- Icon rail (collapsed) -->
+                    <!-- Icon rail (collapsed) - up to 4 pie wedges per source, one per bound
+                         LogType's color (see SourceCardViewModel.WedgeColors), instead of a flat
+                         single-color circle. A source with no LogTypes bound yet just shows one
+                         full-circle "wedge" in its own DisplayColor. -->
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
                                   Visibility="{Binding IsPanelCollapsed, Converter={StaticResource BoolToVis}}">
                         <ItemsControl ItemsSource="{Binding Sources}" Margin="0,4,0,12" HorizontalAlignment="Center">
@@ -165,8 +182,30 @@
                                 <DataTemplate>
                                     <Border Width="34" Height="34" CornerRadius="17" Margin="0,4"
                                             BorderThickness="2" BorderBrush="{Binding Source.CardState, Converter={StaticResource CardStateToBorderBrush}}"
-                                            Background="{Binding Source.DisplayColor, Converter={StaticResource HexToBrush}}"
                                             ToolTip="{Binding Source.Name}" Cursor="Hand">
+                                        <Grid ClipToBounds="True">
+                                            <ItemsControl ItemsSource="{Binding WedgeColors}" AlternationCount="4">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <Grid/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Path Fill="{Binding Converter={StaticResource HexToBrush}}">
+                                                            <Path.Data>
+                                                                <MultiBinding Converter="{StaticResource PieWedgeGeometry}">
+                                                                    <Binding Path="(ItemsControl.AlternationIndex)"
+                                                                             RelativeSource="{RelativeSource AncestorType=ContentPresenter}"/>
+                                                                    <Binding Path="Items.Count"
+                                                                             RelativeSource="{RelativeSource AncestorType=ItemsControl}"/>
+                                                                </MultiBinding>
+                                                            </Path.Data>
+                                                        </Path>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </Grid>
                                         <Border.InputBindings>
                                             <MouseBinding MouseAction="LeftClick"
                                                           Command="{Binding DataContext.TogglePanelCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
@@ -200,10 +239,10 @@
                                 <Path Width="18" Height="18" Stretch="Uniform" Fill="{StaticResource Brush.AccentGreen}"
                                       Data="M9,0 L11,0 L11,9 L20,9 L20,11 L11,11 L11,20 L9,20 L9,11 L0,11 L0,9 L9,9 Z"/>
                             </Border>
-                            <TextBlock Text="Drag files or a .zip here to auto-add a source" Foreground="{StaticResource Brush.TextSecondary}"
+                            <TextBlock Text="Drag files or a .zip here to auto-add a source + log type" Foreground="{StaticResource Brush.TextSecondary}"
                                        FontSize="12.5" Margin="0,10,0,0" HorizontalAlignment="Center">
                                 <TextBlock.ToolTip>
-                                    <ToolTip Content="Drop one or more files (or a .zip) of the same log type here. Log Aggregator will detect the file type and timestamp pattern automatically and add a new source - no wizard needed. If it can't detect confidently, use &quot;+ Add Source&quot; instead so you can review the detection."
+                                    <ToolTip Content="Drop one or more files (or a .zip) of the same log type here. Log Aggregator will detect the file type and timestamp pattern automatically and add a new source plus a matching log type - no editor needed. If it can't detect confidently, use &quot;Manage Log Types&quot; instead so you can review the detection."
                                              MaxWidth="320"/>
                                 </TextBlock.ToolTip>
                             </TextBlock>
@@ -262,6 +301,7 @@
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Source" Binding="{Binding SourceName}" Width="150"
                                             views:DataGridColumnExtensions.SortColumnKey="Source" CanUserSort="True"/>
+                        <DataGridTextColumn Header="Log Type" Binding="{Binding LogTypeName}" Width="130"/>
                         <DataGridTextColumn Header="Universal Timestamp" Binding="{Binding UniversalTimestamp, StringFormat='yyyy-MM-dd HH:mm:ss.fff'}"
                                             Width="200" views:DataGridColumnExtensions.SortColumnKey="UniversalTimestamp" CanUserSort="True"/>
                         <DataGridTextColumn Header="Original Timestamp" Binding="{Binding OriginalTimestamp}"
@@ -320,11 +360,14 @@
                                     Command="{Binding JumpToEndCommand}"/>
                         </StackPanel>
 
-                        <StackPanel Grid.Column="2" Orientation="Horizontal"
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Cursor="Hand"
                                     Visibility="{Binding Warnings.Count, Converter={StaticResource CountToVis}}">
+                            <StackPanel.InputBindings>
+                                <MouseBinding MouseAction="LeftClick" Command="{Binding ViewAllWarningsCommand}"/>
+                            </StackPanel.InputBindings>
                             <TextBlock Text="{Binding Warnings.Count}" Foreground="{StaticResource Brush.Warning}" FontSize="12" Margin="0,0,4,0"/>
-                            <TextBlock Text="parse warning(s)" Foreground="{StaticResource Brush.Warning}" FontSize="12"
-                                       ToolTip="Warnings are logged when a timestamp couldn't be parsed - the row is still kept."/>
+                            <TextBlock Text="parse warning(s) - click to view" Foreground="{StaticResource Brush.Warning}" FontSize="12"
+                                       ToolTip="Warnings are logged when a timestamp couldn't be parsed - the row is still kept. Click to see which files/lines."/>
                         </StackPanel>
                     </Grid>
                 </Border>

@@ -43,6 +43,56 @@
          native dependencies in the .NET publish pipeline). -->
     <PackageReference Include="Dapper" Version="2.1.35" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+
+    <!-- NodaTime: the de facto standard .NET date/time library (Apache-2.0 license, actively
+         maintained, ~450K+ downloads on the packages that build on it) - used by
+         TimestampDetector for exact-format timestamp parsing instead of a hand-rolled
+         DateTime.TryParseExact loop. It's explicit about anything a format string doesn't
+         specify (a missing year, a 2-digit year's century) via an explicit TemplateValue,
+         rather than DateTime.TryParseExact's ambient OS-locale-dependent defaults - see
+         Services/TimestampDetector.cs (TryParseWithNodaTime) for details. The original
+         DateTime.TryParseExact call is kept as an automatic fallback for every format string,
+         so this can only add parsing coverage, never remove it. Apache-2.0 is fully
+         commercial-friendly: free to use forever, no restriction on charging for the app. -->
+    <PackageReference Include="NodaTime" Version="3.2.2" />
   </ItemGroup>
+
+  <!-- ===================================================================================
+       SIMULATION MODE (opt-in, OFF by default) - lets the app be launched as
+       "LogAggregator.exe" with a simulate flag to stress-test Services/TimestampDetector.cs against
+       randomly generated log files instead of showing the UI. See App.xaml.cs
+       (TryHandleSimulationArgs) for the runtime side and tests/LogAggregator.SampleData for
+       the generator/report engine it calls into.
+
+       Left OFF (IncludeSimulationMode unset -> "false" below), a normal `dotnet build` / F5 in
+       Visual Studio:
+         - does NOT define the SIMULATION_MODE compiler symbol (so App.xaml.cs's whole
+           #if SIMULATION_MODE block, including the simulate-flag argument handling, is not
+           compiled into the app at all - not just hidden behind a runtime check), and
+         - does NOT add a ProjectReference to LogAggregator.SampleData, so that project isn't
+           even built as part of the app.
+       In other words this is byte-for-byte identical to the app before this feature existed,
+       unless someone deliberately opts in.
+
+       To opt in for one build: `dotnet build -p:IncludeSimulationMode=true` (or set
+       <IncludeSimulationMode>true</IncludeSimulationMode> in a Directory.Build.props / your
+       own local build profile - never commit that as the checked-in default).
+
+       This is the answer to "should this be removable, or a permanent advanced setting?": it's
+       built to just stay here, permanently, but be permanently inert unless explicitly turned
+       on - so there's nothing to remember to rip back out later, and no risk of ever shipping
+       it on by accident.
+       =================================================================================== -->
+  <PropertyGroup>
+    <IncludeSimulationMode Condition="'$(IncludeSimulationMode)' == ''">false</IncludeSimulationMode>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IncludeSimulationMode)' == 'true'">
+    <ProjectReference Include="..\..\tests\LogAggregator.SampleData\LogAggregator.SampleData.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(IncludeSimulationMode)' == 'true'">
+    <DefineConstants>$(DefineConstants);SIMULATION_MODE</DefineConstants>
+  </PropertyGroup>
 
 </Project>

@@ -5,6 +5,16 @@ VisualStudioVersion = 17.8.34330.188
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LogAggregator", "src\LogAggregator\LogAggregator.csproj", "{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}"
 EndProject
+# LogAggregator.SampleData and LogAggregator.Tests (below) are simulation/testing support
+# projects added to stress-test Services/TimestampDetector.cs with generated data - see
+# the comment blocks at the top of their .csproj files. Neither is referenced by the
+# shipping app; a new project folder does NOT show up in Visual Studio on its own, it has
+# to be registered here (these two Project(...)/EndProject blocks, plus the matching
+# entries in ProjectConfigurationPlatforms below) - that's what this block is doing.
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LogAggregator.SampleData", "tests\LogAggregator.SampleData\LogAggregator.SampleData.csproj", "{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LogAggregator.Tests", "tests\LogAggregator.Tests\LogAggregator.Tests.csproj", "{C842BA21-4CBE-44C0-BF40-E4F6A4750910}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +31,22 @@ Global
 		{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}.Release|Any CPU.Build.0 = Release|x64
 		{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}.Release|x64.ActiveCfg = Release|x64
 		{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}.Release|x64.Build.0 = Release|x64
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Debug|x64.Build.0 = Debug|Any CPU
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Release|x64.ActiveCfg = Release|Any CPU
+		{B1218ED3-C7B1-40C8-95A5-7ED069A892F2}.Release|x64.Build.0 = Release|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Debug|x64.Build.0 = Debug|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Release|x64.ActiveCfg = Release|Any CPU
+		{C842BA21-4CBE-44C0-BF40-E4F6A4750910}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -1,0 +1,125 @@
+<UserControl x:Class="LogAggregator.Views.LogTypeChip"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="clr-namespace:LogAggregator.Converters"
+             xmlns:common="clr-namespace:LogAggregator.Common"
+             xmlns:vm="clr-namespace:LogAggregator.ViewModels"
+             d:DataContext="{d:DesignInstance vm:LogTypeChipViewModel}"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+
+    <UserControl.Resources>
+        <conv:HexToBrushConverter x:Key="HexToBrush"/>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+    </UserControl.Resources>
+
+    <Grid ToolTipService.ShowDuration="20000">
+        <Grid.ToolTip>
+            <ToolTip>
+                <StackPanel MaxWidth="260">
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding ParsedBlockCount, StringFormat='{}{0:N0} block(s)'}" FontSize="11"/>
+                    <TextBlock Text="{Binding ErrorMessage}" FontSize="11" TextWrapping="Wrap"
+                               Foreground="{StaticResource Brush.Warning}"
+                               Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
+            </ToolTip>
+        </Grid.ToolTip>
+
+        <Border x:Name="ChipBorder" Width="30" Height="30" CornerRadius="15"
+                BorderThickness="1.4" BorderBrush="{StaticResource Brush.Border}"
+                common:DragDropBehavior.DropCommand="{Binding DropCommand}"
+                Background="{Binding ColorHex, Converter={StaticResource HexToBrush}}">
+            <!-- Right-click menu: settings/remove for this chip's LogType binding. ContextMenu
+                 is a separate visual tree in WPF and does NOT inherit DataContext from its
+                 PlacementTarget automatically - the explicit DataContext binding below is the
+                 standard fix (same pattern the app would need anywhere else it wants a
+                 data-bound right-click menu; the grid's existing "Copy Full Message" menu avoids
+                 the issue entirely by using Click= code-behind instead). -->
+            <Border.ContextMenu>
+                <ContextMenu Style="{StaticResource Style.ContextMenu}"
+                             DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                    <MenuItem Header="Log Type Settings..." Style="{StaticResource Style.MenuItem}" Command="{Binding OpenSettingsCommand}"/>
+                    <MenuItem Header="Set Timestamp Pattern..." Style="{StaticResource Style.MenuItem}" Command="{Binding SetTimestampPatternCommand}"/>
+                    <Separator Style="{StaticResource Style.MenuSeparator}"/>
+                    <MenuItem Header="Remove From This Source" Style="{StaticResource Style.MenuItem}" Command="{Binding RemoveFromSourceCommand}"/>
+                </ContextMenu>
+            </Border.ContextMenu>
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding DisplayMode}" Value="Icon">
+                            <Setter Property="Background" Value="{StaticResource Brush.SurfaceBase}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding DisplayMode}" Value="Both">
+                            <Setter Property="Width" Value="36"/>
+                            <Setter Property="Height" Value="36"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding common:DragDropBehavior.IsDragOver, RelativeSource={RelativeSource Self}}" Value="True">
+                            <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentGreen}"/>
+                            <Setter Property="BorderThickness" Value="2.4"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+
+            <Grid>
+                <TextBlock Text="{Binding IconGlyph}" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                           HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#FF0B0E12"/>
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding DisplayMode}" Value="Icon">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Setter Property="Foreground" Value="{Binding ColorHex, Converter={StaticResource HexToBrush}}"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding DisplayMode}" Value="Both">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <!-- Tiny syncing spinner - independent per chip, since each LogType binding
+                     syncs on its own now rather than the whole card blocking together. -->
+                <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource Brush.AccentGreen}"
+                      StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Data="M13,2 A11,11 0 1 1 4,6" RenderTransformOrigin="0.5,0.5"
+                      Visibility="{Binding IsSyncing, Converter={StaticResource BoolToVis}}" Cursor="Hand">
+                    <Path.InputBindings>
+                        <MouseBinding MouseAction="LeftClick" Command="{Binding CancelSyncCommand}"/>
+                    </Path.InputBindings>
+                    <Path.RenderTransform>
+                        <RotateTransform/>
+                    </Path.RenderTransform>
+                    <Path.Triggers>
+                        <EventTrigger RoutedEvent="Loaded">
+                            <BeginStoryboard Storyboard="{StaticResource Storyboard.SpinForever}"/>
+                        </EventTrigger>
+                    </Path.Triggers>
+                </Path>
+
+                <!-- Small warning badge for a binding that needs the user's help (e.g. an
+                     undetermined timestamp) - see IngestionWarning.RequiresUserAction. Shows
+                     the actual count ("3") so a user can tell "one thing to check" apart from
+                     "this file is a mess" at a glance, and clicking it opens the full Parse
+                     Warnings list filtered to this chip - "let the user see the files that
+                     didn't match" for this specific binding. -->
+                <Border MinWidth="12" Height="12" CornerRadius="6" Background="{StaticResource Brush.Warning}"
+                        Padding="2,0" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-3,-3,0"
+                        Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}"
+                        Cursor="Hand" ToolTip="{Binding ErrorMessage}">
+                    <Border.InputBindings>
+                        <MouseBinding MouseAction="LeftClick" Command="{Binding ViewWarningsCommand}"/>
+                    </Border.InputBindings>
+                    <TextBlock Text="{Binding ErrorCount}" FontSize="9" FontWeight="Bold" Foreground="#FF0B0E12"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

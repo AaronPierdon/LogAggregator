@@ -34,4 +34,27 @@
                          From="1" To="0" Duration="0:0:0.18"/>
     </Storyboard>
 
+    <!-- Brief scale+glow pulse played while a drag hovers over a Source card or a LogType chip
+         (see Common/DragDropBehavior.cs's IsDragOver attached property, toggled on a
+         DataTrigger in SourceCardTemplate.xaml/LogTypeChip.xaml). RepeatBehavior=Forever so it
+         keeps gently pulsing for as long as the drag lingers, rather than firing once and
+         stopping while the user is still deciding whether to drop. Targets a RenderTransform on
+         the element the trigger is set on - callers must give that element a
+         ScaleTransform RenderTransformOrigin="0.5,0.5" (see SourceCardTemplate.xaml's outer
+         Border and LogTypeChip's ChipBorder). -->
+    <Storyboard x:Key="Storyboard.DragPulse" RepeatBehavior="Forever" AutoReverse="True">
+        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                         To="1.035" Duration="0:0:0.5">
+            <DoubleAnimation.EasingFunction>
+                <CubicEase EasingMode="EaseInOut"/>
+            </DoubleAnimation.EasingFunction>
+        </DoubleAnimation>
+        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                         To="1.035" Duration="0:0:0.5">
+            <DoubleAnimation.EasingFunction>
+                <CubicEase EasingMode="EaseInOut"/>
+            </DoubleAnimation.EasingFunction>
+        </DoubleAnimation>
+    </Storyboard>
+
 </ResourceDictionary>

@@ -230,3 +230,92 @@ a couple of missing `using` directives, a `Visibility` converter fed an `int` in
 `bool`), but a hand-review is not a substitute for a compiler. Please treat the first build as a
 checkpoint, not a guarantee - and once you've got it building, hand the folder back to me and
 I'll keep iterating directly against real build errors and your feedback using the actual files.
+
+## Simulation mode - stress-testing the timestamp engine with generated data
+
+Two extra projects were added under `tests/` to stress-test `Services/TimestampDetector.cs`
+with generated data instead of only the 5 real sample logs in `/samples`. Neither one ships as
+part of the app - see "Is this permanent, and does it affect the shipping app?" below.
+
+```
+tests/
+  LogAggregator.SampleData/    - class library: generates random log files with a KNOWN-CORRECT
+                                  timestamp per line, then runs them through the real detection
+                                  pipeline and reports what passed/failed. No parsing logic is
+                                  duplicated here - it only calls into LogAggregator.Services.
+    TimestampFormatCatalog.cs  - ~18 timestamp shapes (ISO-8601, offset/"-0400"-style, 12-hour,
+                                  syslog, 2-digit year, Unix epoch, etc.), each one matching a
+                                  real entry in TimestampDetector.CandidateFormats.
+    RandomDataFactory.cs       - seeded random log record generator (messages, "other data").
+    TimestampRenderer.cs       - turns (DateTime, format) into rendered text + the exact
+                                  expected value once that format's precision is applied.
+    SampleLogGenerator.cs      - builds "groups" of 4 files (2 CSV + 2 TXT, as two same-content
+                                  pairs) - see "What gets generated" below.
+    SimulationRunner.cs        - runs a batch through FileTypeDetector + TimestampDetector
+                                  (the exact same calls the wizard's auto-detect step makes)
+                                  and compares every line's re-parsed value against ground truth.
+    SimulationReport.cs        - the report model + ToReportText(), a plain-text summary of
+                                  exactly which files/lines failed and why.
+  LogAggregator.Tests/         - xUnit project. Two kinds of test:
+    TimestampFormatCatalogTests.cs - one [Theory] case per catalog format (both CSV and TXT),
+                                  so a regression in one specific shape shows up as that one
+                                  named test failing in Test Explorer, not just an aggregate.
+    SimulationSweepTests.cs    - one [Fact] that runs a bigger batch and writes the full report
+                                  to bin/.../SimulationReports/ - this is the "give me a report
+                                  of what failed" half of the request.
+```
+
+**What gets generated**: each "group" is 4 files sharing the same 3 logical columns
+(`TimeStamp`, `Message`, `OtherData` for CSV; a single flat-text line per record for TXT) but
+each file picks its own timestamp shape and (for CSV) its own column position - predominantly
+column 0, since the point is exercising *pattern* variety, not *position* variety. The first
+CSV/TXT pair in a group shares identical underlying log records with each other; so does the
+second pair - matching "the first pair, csv and txt will have the same logs."
+
+**Running it**:
+```
+dotnet test tests/LogAggregator.Tests/LogAggregator.Tests.csproj
+```
+runs both the per-format theories and the full sweep, and Visual Studio's Test Explorer picks up
+`LogAggregator.Tests` automatically once the solution is open (it's registered in
+`LogAggregator.sln` - see the note in that file: **a new project folder does NOT show up in
+Visual Studio on its own**, it has to be added to the `.sln`, which is already done here).
+
+The app itself can also run the same engine headlessly, without the UI, once simulation mode is
+turned on for the build (see below):
+```
+dotnet build src/LogAggregator/LogAggregator.csproj -p:IncludeSimulationMode=true
+src\LogAggregator\bin\Debug\net8.0-windows\LogAggregator.exe --simulate
+```
+This writes a report to the Desktop and shows a one-line pass/fail summary in a message box -
+useful for a quick manual check without opening a test runner. Optional flags:
+`--simulate-seed=N`, `--simulate-groups=N`, `--simulate-records=N` (see `App.xaml.cs`,
+`TryHandleSimulationArgs`).
+
+**A known, pre-existing gap this exposes rather than hides**: `AutoDetectDelimitedMultiLine`
+(the CSV/Tab column-detection path) has no "best effort, try anything .NET can parse" fallback
+the way the single-line detector does - it only considers a column if it matches a fairly
+strict "looks like a date+time" regex first. That means a bare Unix-epoch number or a
+no-year value in a CSV column is never picked up, even though the exact same shape works fine
+in a flat-text file. `TimestampFormatCatalog.SupportsDelimited` marks those shapes
+FlatText-only so the simulation report doesn't cry wolf about a known limitation - but it's a
+real gap, worth fixing later if CSV logs with those shapes ever show up for real.
+
+**Is this permanent, and does it affect the shipping app?** Both, by design, and no. Turning it
+on requires an explicit build flag (`-p:IncludeSimulationMode=true`, or a local
+`Directory.Build.props` - never the checked-in default). Left off, which is the default:
+
+- `LogAggregator.csproj` does not reference `LogAggregator.SampleData` at all.
+- `App.xaml.cs`'s entire simulation block is wrapped in `#if SIMULATION_MODE` - it isn't just
+  hidden behind a runtime check, it isn't compiled into the .exe at all.
+- The app is byte-for-byte the same as if this feature didn't exist.
+
+That's the answer to "should this be removable later, or a permanent advanced setting?" - it's
+built to just stay here permanently, but stay permanently inert unless deliberately turned on,
+so there's nothing to remember to tear back out, and no way to ship it turned on by accident.
+If you'd rather have it gone entirely at some point, deleting `tests/LogAggregator.SampleData/`
+and `tests/LogAggregator.Tests/`, their two `Project(...)` blocks in `LogAggregator.sln`, the
+`IncludeSimulationMode`/`SIMULATION_MODE` block at the bottom of `LogAggregator.csproj`, and the
+two `#if SIMULATION_MODE` blocks in `App.xaml.cs` removes every trace of it - every place that
+touches this feature is marked with a "SIMULATION SUPPORT" / "SIMULATION MODE" comment for
+exactly that reason.

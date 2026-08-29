@@ -7,8 +7,8 @@ using LogAggregator.Models;
 namespace LogAggregator.Services;
 
 /// <summary>
-/// Loads/saves sources.config.json in the application's base directory (next to the exe),
-/// so all source cards, names, patterns, colors, and file paths survive an app restart.
+/// Loads/saves sources.config.json in the application's base directory (next to the exe), so
+/// all sources, LogTypes, colors, and settings survive an app restart.
 /// </summary>
 public class ConfigService
 {
@@ -32,7 +32,15 @@ public class ConfigService
 
             using var stream = File.OpenRead(ConfigPath);
             var config = await JsonSerializer.DeserializeAsync<AppConfig>(stream, JsonOptions).ConfigureAwait(false);
-            return config ?? new AppConfig();
+
+            // Version cutover: the LogTypes/restructured-Source model (schema version 2) has no
+            // equivalent shape for an older config file, so - per the app's current
+            // early-development stage - an old or unrecognized version just starts fresh rather
+            // than attempting a field-by-field migration. LogDatabase.Initialize() does the same
+            // thing for the SQLite side (see its SchemaVersion check).
+            if (config is null || config.Version != AppConfig.CurrentVersion) return new AppConfig();
+
+            return config;
         }
         catch
         {

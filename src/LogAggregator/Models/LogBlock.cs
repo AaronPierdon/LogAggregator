@@ -28,8 +28,22 @@ public sealed class LogBlock
     /// <summary>Denormalized for display performance (avoids a join per row).</summary>
     public string SourceName { get; set; } = string.Empty;
 
-    /// <summary>Denormalized hex color, used by the row-tint converter without a join.</summary>
+    /// <summary>Denormalized hex color, used when the "Log line coloring" setting is Source.</summary>
     public string SourceColor { get; set; } = "#4C9BFF";
+
+    /// <summary>Which LogType produced this row (e.g. "Kepware") - denormalized alongside the
+    /// Source fields for the same display-performance reason.</summary>
+    public string LogTypeId { get; set; } = string.Empty;
+
+    public string LogTypeName { get; set; } = string.Empty;
+
+    /// <summary>Denormalized hex color, used when the "Log line coloring" setting is LogType
+    /// (the default).</summary>
+    public string LogTypeColor { get; set; } = "#4C9BFF";
+
+    /// <summary>Denormalized Segoe MDL2 Assets glyph, in case the grid ever wants to show it
+    /// per-row (not used by the row tint itself, which is color-only).</summary>
+    public string LogTypeIcon { get; set; } = string.Empty;
 
     /// <summary>All lines of this block joined with '\n'. Filter matching and display read
     /// this directly; continuation lines (for export formatting) are recovered via

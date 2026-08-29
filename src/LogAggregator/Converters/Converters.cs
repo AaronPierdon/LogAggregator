@@ -118,11 +118,19 @@ public class IntEqualsToVisibilityConverter : IValueConverter
         throw new NotSupportedException();
 }
 
-/// <summary>Visible when a bound integer count is greater than zero (e.g. a warnings badge).</summary>
+/// <summary>Visible when a bound integer count is greater than zero (e.g. a warnings badge).
+/// Set Invert="True" for the opposite - an empty-state message shown only when the count is
+/// zero (e.g. "No parse warnings" in the Parse Warnings window).</summary>
 public class CountToVisibilityConverter : IValueConverter
 {
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        value is int i && i > 0 ? Visibility.Visible : Visibility.Collapsed;
+    public bool Invert { get; set; }
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var b = value is int i && i > 0;
+        if (Invert) b = !b;
+        return b ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

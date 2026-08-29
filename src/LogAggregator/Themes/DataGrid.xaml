@@ -6,6 +6,7 @@
     </ResourceDictionary.MergedDictionaries>
 
     <conv:SourceTintConverter x:Key="SourceTintConverter"/>
+    <conv:RowTintConverter x:Key="RowTintConverter"/>
 
     <Style TargetType="DataGridColumnHeader">
         <Setter Property="Background" Value="{StaticResource Brush.SurfaceRaised}"/>
@@ -88,12 +89,22 @@
         </Style.Triggers>
     </Style>
 
-    <!-- Row: background comes from the SourceTintConverter binding set in the DataGrid's RowStyle
-         at the view level (MainWindow.xaml), this style only adds the animated selection accent bar. -->
+    <!-- Row: background comes from the RowTintConverter MultiBinding below, driven by the
+         "Log line coloring" setting (LogType color / Source color / none) - see
+         Converters/RowTintConverter.cs and MainViewModel.LogLineColorMode. This style otherwise
+         only adds the animated selection accent bar. -->
     <Style x:Key="Style.LogDataGridRow" TargetType="DataGridRow">
         <Setter Property="BorderThickness" Value="0,0,0,1"/>
         <Setter Property="BorderBrush" Value="{StaticResource Brush.BorderSubtle}"/>
-        <Setter Property="Background" Value="{Binding SourceColor, Converter={StaticResource SourceTintConverter}}"/>
+        <Setter Property="Background">
+            <Setter.Value>
+                <MultiBinding Converter="{StaticResource RowTintConverter}">
+                    <Binding Path="LogTypeColor"/>
+                    <Binding Path="SourceColor"/>
+                    <Binding Path="DataContext.LogLineColorMode" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                </MultiBinding>
+            </Setter.Value>
+        </Setter>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="DataGridRow">

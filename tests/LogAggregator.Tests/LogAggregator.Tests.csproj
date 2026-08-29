@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ===================================================================================
+       UNIT/INTEGRATION TEST PROJECT - added to stress-test the timestamp detection engine
+       (Services/TimestampDetector.cs) using LogAggregator.SampleData's generator, on top of
+       the manual verification this whole feature has otherwise relied on.
+
+       Like LogAggregator.SampleData, this project is NOT part of the shipping app and is not
+       referenced by it. It shows up in Visual Studio's Solution Explorer only because it's
+       registered in LogAggregator.sln (see the comment block near the top of that file) -
+       a .csproj sitting in a folder is NOT enough by itself; Visual Studio (and `dotnet build`
+       at the solution level) only look at projects the .sln lists.
+       =================================================================================== -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>LogAggregator.Tests</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <!-- Test projects aren't "the app" - no reason to build/restore a self-contained win-x64
+         payload for one. The referenced LogAggregator.csproj keeps its own publish settings;
+         this only affects how LogAggregator.Tests itself is produced. -->
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- xUnit: the most widely used .NET test framework (MIT license), and Microsoft's own
+         default template choice for new test projects - "well-vetted" per the original
+         request. xunit.runner.visualstudio is what makes tests show up in VS's Test Explorer;
+         Microsoft.NET.Test.Sdk is required for `dotnet test`/VS to discover any test project
+         at all. -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LogAggregator\LogAggregator.csproj" />
+    <ProjectReference Include="..\LogAggregator.SampleData\LogAggregator.SampleData.csproj" />
+  </ItemGroup>
+
+</Project>

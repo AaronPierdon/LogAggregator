@@ -5,6 +5,8 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using LogAggregator.Models;
+using NodaTime;
+using NodaTime.Text;
 
 namespace LogAggregator.Services;
 
@@ -23,13 +25,25 @@ public class TimestampDetectionResult
 }
 
 /// <summary>
-/// Locates and parses timestamps across a wide range of real-world log shapes without the
-/// user needing to hand-write a regex or format string. Built from direct inspection of five
-/// very differently-shaped sample logs (Windows Event Viewer CSV/TXT exports with 12-hour and
+/// Locates and parses timestamps across a wide range of real-world log shapes without the user
+/// needing to hand-write a regex or format string. Originally built from direct inspection of
+/// five differently-shaped sample logs (Windows Event Viewer CSV/TXT exports with 12-hour and
 /// 24-hour timestamps, a space-padded flat-text SCADA log with the timestamp split across two
 /// leading columns, and two comma-delimited PI System logs with variable-precision fractional
-/// seconds). The same detection logic is reused at ingestion time, so a profile built from one
-/// sample line generalizes to the rest of the file.
+/// seconds); hardened further to cover more permutations - syslog-style month-first timestamps,
+/// bracketed timestamps, compact/no-separator forms, 2-digit years, dot-separated dates, and
+/// Unix epoch seconds/milliseconds - since real deployments show up with all of these. The same
+/// detection logic is reused at ingestion time, so a profile built from sample lines generalizes
+/// to the rest of the file.
+///
+/// The "where in the line/record is the timestamp" logic below is all hand-rolled (regexes
+/// tuned against real sample logs) - that part is inherently specific to this app and no
+/// library replaces it well. The "turn the located text into a DateTime" half now goes through
+/// NodaTime first (see TryParseWithNodaTime) - it's explicit about anything a format string
+/// doesn't specify (a missing year, a 2-digit year's century) via a template value, instead of
+/// DateTime.TryParseExact's ambient OS-locale-dependent defaults. DateTime.TryParseExact is
+/// kept as an automatic fallback for every format string in TryParseExactNormalized, so the
+/// NodaTime path can only add parsing coverage, never remove it.
 /// </summary>
 public static class TimestampDetector
 {
@@ -40,35 +54,103 @@ public static class TimestampDetector
         "yyyy-MM-ddTHH:mm:ssK",
         "yyyy-MM-dd HH:mm:ss.fffffff",
         "yyyy-MM-dd HH:mm:ss",
+        // Space-separated date/time followed by a signed UTC offset - e.g. "2026-08-08
+        // 14:23:05 -0400" (a very common export/log shape, distinct from the "T"-separated
+        // ISO-8601 "K" formats above). "zzz" always expects a colon in the offset
+        // ("-04:00") - NormalizeOffset (see TryParseExactNormalized) inserts one before
+        // parsing if the source log wrote it without one ("-0400"), the same normalize-
+        // before-parse trick NormalizeFractionalSeconds already uses.
+        "yyyy-MM-dd HH:mm:ss.fffffff zzz",
+        "yyyy-MM-dd HH:mm:ss zzz",
+        "MM/dd/yyyy HH:mm:ss.fffffff zzz",
+        "MM/dd/yyyy HH:mm:ss zzz",
         "yyyy/MM/dd HH:mm:ss.fffffff",
         "yyyy/MM/dd HH:mm:ss",
+        "yyyy.MM.dd HH:mm:ss.fffffff",
+        "yyyy.MM.dd HH:mm:ss",
+        "yyyyMMdd HHmmss.fffffff",
+        "yyyyMMdd HHmmss",
+        "yyyyMMddHHmmss",
         "MM-dd-yyyy HH:mm:ss.fffffff",
         "MM-dd-yyyy HH:mm:ss",
         "MM/dd/yyyy HH:mm:ss.fffffff",
         "MM/dd/yyyy HH:mm:ss",
+        "dd/MM/yyyy HH:mm:ss.fffffff",
+        "dd/MM/yyyy HH:mm:ss",
+        "dd.MM.yyyy HH:mm:ss.fffffff",
+        "dd.MM.yyyy HH:mm:ss",
+        "MM-dd-yy HH:mm:ss",
+        "MM/dd/yy HH:mm:ss",
+        "yy-MM-dd HH:mm:ss",
+        "yy/MM/dd HH:mm:ss",
         "M/d/yyyy h:mm:ss.fffffff tt",
         "M/d/yyyy h:mm:ss tt",
         "M/d/yyyy H:mm:ss",
+        "M/d/yy H:mm:ss",
         "dd-MMM-yyyy HH:mm:ss.fffffff",
         "dd-MMM-yyyy HH:mm:ss",
         "dd-MMM-yy HH:mm:ss.fffffff",
         "dd-MMM-yy HH:mm:ss",
+        // Syslog-style: month name leads, no year (year filled from the current date - see
+        // TryParseExactNormalized, which drops NoCurrentDateDefault for these formats).
+        "MMM d HH:mm:ss.fffffff",
+        "MMM d HH:mm:ss",
+        "MMM dd HH:mm:ss",
+        "MMM d yyyy HH:mm:ss",
+        "MMM dd yyyy HH:mm:ss",
+        "MMMM d, yyyy HH:mm:ss",
+        "MMMM d yyyy h:mm:ss tt",
         "yyyy-MM-dd",
         "MM-dd-yyyy",
         "MM/dd/yyyy",
     };
 
-    private static readonly Regex LeadingTimestampRegex = new(
-        @"^\s*(?<ts>\d{1,4}[-/][A-Za-z]{0,3}\d{0,2}[-/]?\d{0,4}\s+\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s*[AaPp][Mm])?(?:\s*Z|\s*[+-]\d{2}:?\d{2})?)",
+    /// <summary>Numeric-date-first leading timestamp: "2024-01-02 15:04:05", "01/02/2024
+    /// 3:04:05 PM", "2024-01-02T15:04:05.123Z", etc. Tried first since it's the shape the app's
+    /// original sample logs use.</summary>
+    private static readonly Regex LeadingTimestampRegexNumeric = new(
+        @"^\s*(?<ts>\d{1,4}[-/.][A-Za-z]{0,3}\d{0,2}[-/.]?\d{0,4}[T\s]+\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s*[AaPp][Mm])?(?:\s*Z|\s*[+-]\d{2}:?\d{2})?)",
         RegexOptions.Compiled);
+
+    /// <summary>Syslog-style month-name-first leading timestamp: "Jan  2 15:04:05", "Jan 02
+    /// 2024 15:04:05.123456". Tried when the numeric-first shape doesn't match.</summary>
+    private static readonly Regex LeadingTimestampRegexMonthFirst = new(
+        @"^\s*(?<ts>[A-Za-z]{3,9}\.?\s+\d{1,2},?(?:\s+\d{2,4})?\s+\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s*[AaPp][Mm])?)",
+        RegexOptions.Compiled);
+
+    /// <summary>A leading timestamp wrapped in brackets or parentheses: "[2024-01-02
+    /// 15:04:05]", "(01/02/2024 15:04:05)" - common in wrapped/bracketed log formats. The
+    /// brackets themselves are outside the "ts" capture.</summary>
+    private static readonly Regex LeadingTimestampRegexBracketed = new(
+        @"^\s*[\[\(](?<ts>\d{1,4}[-/.][A-Za-z]{0,3}\d{0,2}[-/.]?\d{0,4}[T\s]+\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s*[AaPp][Mm])?(?:\s*Z|\s*[+-]\d{2}:?\d{2})?)[\]\)]",
+        RegexOptions.Compiled);
+
+    /// <summary>A leading all-digit Unix epoch (seconds or milliseconds since 1970), e.g. a raw
+    /// "1700000000" or "1700000000123" at the start of the line, followed by whitespace.</summary>
+    private static readonly Regex LeadingTimestampRegexEpoch = new(
+        @"^\s*(?<ts>\d{10}(?:\d{3})?)\s+",
+        RegexOptions.Compiled);
+
+    /// <summary>Tried in order - most specific/least likely to false-positive first.</summary>
+    private static readonly Regex[] LeadingTimestampRegexCandidates =
+    {
+        LeadingTimestampRegexBracketed,
+        LeadingTimestampRegexNumeric,
+        LeadingTimestampRegexMonthFirst,
+        LeadingTimestampRegexEpoch
+    };
+
+    // Default/legacy single regex, kept for any external code (and the "ts"/group-1 fallback
+    // path) that still references "the" leading timestamp regex.
+    private static readonly Regex LeadingTimestampRegex = LeadingTimestampRegexNumeric;
 
     // Looser check: "does this string contain something date-shaped AND time-shaped anywhere".
     private static readonly Regex LooksLikeDateTime = new(
-        @"\d{1,4}[-/][A-Za-z]{0,3}[-/]?\d{0,4}[-/]?\d{0,4}.{0,3}\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?",
+        @"(\d{1,4}[-/.][A-Za-z]{0,3}[-/.]?\d{0,4}[-/.]?\d{0,4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?(?:\s+\d{2,4})?).{0,3}\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?",
         RegexOptions.Compiled);
 
     private static readonly Regex LooksLikeDateOnly = new(
-        @"^\d{1,4}[-/][A-Za-z0-9]{1,4}[-/]\d{1,4}$", RegexOptions.Compiled);
+        @"^\d{1,4}[-/.][A-Za-z0-9]{1,4}[-/.]\d{1,4}$|^[A-Za-z]{3,9}\.?\s+\d{1,2},?(?:\s+\d{2,4})?$", RegexOptions.Compiled);
 
     private static readonly Regex LooksLikeTimeOnly = new(
         @"^\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*([AaPp][Mm])?$", RegexOptions.Compiled);
@@ -78,6 +160,13 @@ public static class TimestampDetector
     private static readonly Regex FractionalSecondsRegex = new(@"(?<=:\d{2})[.,](?<frac>\d+)", RegexOptions.Compiled);
 
     private static readonly ConcurrentDictionary<string, Regex> UserRegexCache = new();
+
+    /// <summary>Compiled NodaTime patterns, keyed by the same .NET-style format string used for
+    /// DateTime.TryParseExact - CreateWithInvariantCulture does real parsing work on the pattern
+    /// text itself, so this avoids redoing that on every line during a multi-million-row
+    /// ingestion. Cached without a template value; TryParseWithNodaTime supplies one per call via
+    /// WithTemplateValue, which is a cheap field swap, not a re-parse.</summary>
+    private static readonly ConcurrentDictionary<string, LocalDateTimePattern> NodaPatternCache = new();
 
     // ===================================================================
     // Public: auto-detect from a single pasted sample line
@@ -95,18 +184,18 @@ public static class TimestampDetector
 
     private static TimestampDetectionResult AutoDetectLineStart(string sampleLine)
     {
-        var match = LeadingTimestampRegex.Match(sampleLine);
-        if (!match.Success)
+        var (regex, match) = MatchLeadingTimestamp(sampleLine);
+        if (regex is null || match is null)
         {
             return Fail("No timestamp-shaped text found at the start of the line. " +
                          "If the timestamp isn't at the very start, pick CSV or Tab-delimited instead.");
         }
 
-        var raw = match.Groups["ts"].Value;
+        var raw = ExtractTimestampText(match);
         var profile = new TimestampProfile
         {
             Mode = TimestampLocationMode.LineStart,
-            RegexPattern = LeadingTimestampRegex.ToString(),
+            RegexPattern = regex.ToString(),
         };
 
         if (TryParseTimestampText(raw, profile, out var utc))
@@ -124,6 +213,49 @@ public static class TimestampDetector
 
         return Fail($"Found what looks like a timestamp (\"{raw}\") but couldn't parse it. " +
                      "Try entering a format string manually.");
+    }
+
+    /// <summary>Tries each candidate leading-timestamp regex in turn, returning the first one
+    /// that matches (and its match), or (null, null) if none do.</summary>
+    private static (Regex? Regex, Match? Match) MatchLeadingTimestamp(string line)
+    {
+        foreach (var regex in LeadingTimestampRegexCandidates)
+        {
+            var match = regex.Match(line);
+            if (match.Success) return (regex, match);
+        }
+        return (null, null);
+    }
+
+    /// <summary>Finds the span of whatever leading-timestamp shape (bracketed, numeric,
+    /// month-first, or epoch) this line starts with, if any - reuses the exact same regex
+    /// candidates AutoDetectLineStartMultiLine votes across, so "does this line look like it has
+    /// a timestamp" is answered identically everywhere in the app. Used by
+    /// TimestampPickerViewModel both to rank sample lines (prefer showing the user a line that
+    /// actually has a recognizable timestamp over one that doesn't, e.g. a CSV/export header row
+    /// mixed into the sample) and to offer a single one-click "use this" suggestion instead of
+    /// making the user select+tag every digit run by hand.</summary>
+    public static (int Start, int Length)? FindLikelyTimestampSpan(string line)
+    {
+        var (regex, match) = MatchLeadingTimestamp(line);
+        if (regex is null || match is null) return null;
+
+        var tsGroup = match.Groups["ts"];
+        return tsGroup.Success ? (tsGroup.Index, tsGroup.Length) : (match.Index, match.Length);
+    }
+
+    /// <summary>Extracts the matched timestamp text from a leading-timestamp match, combining
+    /// separate "date"+"time" named groups (produced by the interactive region picker - see
+    /// TimestampPickerViewModel) if present, else falling back to "ts", else group 1.</summary>
+    private static string ExtractTimestampText(Match match)
+    {
+        var dateGroup = match.Groups["date"];
+        var timeGroup = match.Groups["time"];
+        if (dateGroup.Success && timeGroup.Success)
+            return $"{dateGroup.Value.Trim()} {timeGroup.Value.Trim()}";
+
+        if (match.Groups["ts"].Success) return match.Groups["ts"].Value;
+        return match.Groups.Count > 1 ? match.Groups[1].Value : match.Value;
     }
 
     private static TimestampDetectionResult AutoDetectDelimited(string sampleLine, char delimiter)
@@ -231,20 +363,37 @@ public static class TimestampDetector
         if (nonEmpty.Count == 0)
             return new MultiLineDetectionResult { Status = DetectionStatus.Failed, Message = "No content found to analyze." };
 
-        var hits = new List<(string raw, DateTime utc)>();
-        foreach (var line in nonEmpty)
-        {
-            var match = LeadingTimestampRegex.Match(line);
-            if (!match.Success) continue;
+        // Try each candidate regex shape in turn; use whichever one gets the best match rate
+        // across the sample, so a file that's mostly syslog-style but has a few odd lines
+        // still gets voted on consistently rather than the first shape "winning" outright.
+        Regex? bestRegex = null;
+        var bestHits = new List<(string raw, DateTime utc)>();
+        double bestRate = 0;
 
-            var raw = match.Groups["ts"].Value;
-            var probeProfile = new TimestampProfile { Mode = TimestampLocationMode.LineStart, RegexPattern = LeadingTimestampRegex.ToString() };
-            if (TryParseTimestampText(raw, probeProfile, out var utc))
-                hits.Add((raw, utc));
+        foreach (var regex in LeadingTimestampRegexCandidates)
+        {
+            var hits = new List<(string raw, DateTime utc)>();
+            foreach (var line in nonEmpty)
+            {
+                var match = regex.Match(line);
+                if (!match.Success) continue;
+
+                var raw = ExtractTimestampText(match);
+                var probeProfile = new TimestampProfile { Mode = TimestampLocationMode.LineStart, RegexPattern = regex.ToString() };
+                if (TryParseTimestampText(raw, probeProfile, out var utc))
+                    hits.Add((raw, utc));
+            }
+
+            double rate = hits.Count / (double)nonEmpty.Count;
+            if (rate > bestRate)
+            {
+                bestRate = rate;
+                bestHits = hits;
+                bestRegex = regex;
+            }
         }
 
-        double rate = hits.Count / (double)nonEmpty.Count;
-        if (hits.Count == 0 || rate < 0.3)
+        if (bestRegex is null || bestHits.Count == 0 || bestRate < 0.3)
         {
             return new MultiLineDetectionResult
             {
@@ -256,7 +405,7 @@ public static class TimestampDetector
         var profile = new TimestampProfile
         {
             Mode = TimestampLocationMode.LineStart,
-            RegexPattern = LeadingTimestampRegex.ToString(),
+            RegexPattern = bestRegex.ToString(),
             Description = "Start of line"
         };
 
@@ -269,12 +418,12 @@ public static class TimestampDetector
                 {
                     Profile = profile,
                     Description = "Start of line",
-                    ExampleRawText = hits[0].raw,
-                    ExampleUtc = hits[0].utc,
-                    MatchRate = rate
+                    ExampleRawText = bestHits[0].raw,
+                    ExampleUtc = bestHits[0].utc,
+                    MatchRate = bestRate
                 }
             },
-            Message = $"Matched {hits.Count} of {nonEmpty.Count} sample lines ({rate:P0})."
+            Message = $"Matched {bestHits.Count} of {nonEmpty.Count} sample lines ({bestRate:P0})."
         };
     }
 
@@ -477,7 +626,7 @@ public static class TimestampDetector
             return false;
         }
 
-        originalText = match.Groups["ts"].Success ? match.Groups["ts"].Value : match.Groups[1].Value;
+        originalText = ExtractTimestampText(match);
         return TryParseTimestampText(originalText, profile, out utc);
     }
 
@@ -490,7 +639,7 @@ public static class TimestampDetector
         var match = regex.Match(line);
         if (!match.Success) return TimestampLineResult.NoMatch();
 
-        var raw = match.Groups["ts"].Success ? match.Groups["ts"].Value : match.Groups[1].Value;
+        var raw = ExtractTimestampText(match);
         return TryParseTimestampText(raw, profile, out var utc)
             ? TimestampLineResult.Ok(utc, raw)
             : TimestampLineResult.Unparseable(raw);
@@ -526,7 +675,8 @@ public static class TimestampDetector
 
     /// <summary>
     /// Core parse routine shared by detection and ingestion. Tries, in order: the profile's own
-    /// FormatString (if set), the built-in candidate library, then a culture-invariant free-form
+    /// FormatString (if set), a Unix epoch seconds/milliseconds check (for all-digit text of the
+    /// right length), the built-in candidate library, then a culture-invariant free-form
     /// DateTime.TryParse as a last resort. Fractional seconds of any length are normalized to
     /// match whatever precision the target format expects.
     /// </summary>
@@ -544,6 +694,9 @@ public static class TimestampDetector
             return true;
         }
 
+        if (TryParseEpoch(text, out utcResult))
+            return true;
+
         foreach (var fmt in CandidateFormats)
         {
             if (TryParseExactNormalized(text, fmt, styles, out utcResult))
@@ -559,12 +712,92 @@ public static class TimestampDetector
         return false;
     }
 
+    /// <summary>Recognizes a bare Unix epoch value (seconds or milliseconds since 1970) as a
+    /// timestamp: exactly 10 digits (seconds, valid roughly 2001-2286) or exactly 13 digits
+    /// (milliseconds). Deliberately strict about digit count so it doesn't misfire on ordinary
+    /// numeric IDs/sequence numbers that happen to appear where a timestamp is expected.</summary>
+    private static bool TryParseEpoch(string text, out DateTime utcResult)
+    {
+        utcResult = DateTime.MinValue;
+        if (text.Length != 10 && text.Length != 13) return false;
+        if (!text.All(char.IsDigit)) return false;
+        if (!long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var value)) return false;
+
+        try
+        {
+            // NodaTime's Instant for the epoch math (its representable range is vastly larger
+            // than DateTimeOffset's, so this itself essentially never throws) - the bounds check
+            // below is what actually guards against a 10/13-digit non-timestamp number being
+            // misread as a wildly implausible date, same as before.
+            var instant = text.Length == 10
+                ? Instant.FromUnixTimeSeconds(value)
+                : Instant.FromUnixTimeMilliseconds(value);
+
+            var utc = instant.ToDateTimeUtc();
+            if (utc.Year < 2001 || utc.Year > 2100) return false;
+
+            utcResult = utc;
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentOutOfRangeException or OverflowException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryParseExactNormalized(string text, string format, DateTimeStyles styles, out DateTime utcResult)
     {
         var fracLen = CountTrailingFractionalSpecifier(format);
         var candidate = fracLen > 0 ? NormalizeFractionalSeconds(text, fracLen) : text;
 
-        if (DateTime.TryParseExact(candidate, format, CultureInfo.InvariantCulture, styles, out var parsed))
+        // A "zzz"-bearing format expects an explicit UTC offset in the text (e.g. "-04:00") -
+        // normalize a colon-less one ("-0400", what this app's own leading-timestamp regexes
+        // actually capture) before either parse path sees it.
+        var hasOffset = format.Contains("zzz", StringComparison.Ordinal);
+        if (hasOffset) candidate = NormalizeOffset(candidate);
+
+        // NodaTime first: the same pattern-letter dialect as a .NET custom DateTime format
+        // string for the parts that matter here (y/M/d/H/h/m/s/f/tt), but explicit rather than
+        // implicit about anything the pattern doesn't specify - see TryParseWithNodaTime. The
+        // two ISO-8601 "K" (offset-or-Z) formats and the "zzz" (explicit-offset) formats above
+        // skip this path: LocalDateTimePattern parses an offset-*less* LocalDateTime, so neither
+        // has a direct equivalent - those go straight to DateTime.TryParseExact below (with
+        // AdjustToUniversal - see below) instead, same as before NodaTime was introduced.
+        if (!format.Contains('K') && !hasOffset && TryParseWithNodaTime(candidate, format, out utcResult))
+        {
+            return true;
+        }
+
+        // Fallback - and the only path for "K"/"zzz" formats. Left exactly as it worked before
+        // NodaTime was introduced (aside from the AdjustToUniversal addition just below), so it
+        // can only ever catch what the NodaTime path above missed, never do worse.
+        //
+        // Formats with no year specifier (syslog-style "MMM d HH:mm:ss") need the *current*
+        // year filled in, not year 1 - NoCurrentDateDefault would otherwise leave it at 0001.
+        var hasYear = format.Contains("yyyy", StringComparison.Ordinal) || format.Contains("yy", StringComparison.Ordinal);
+        var effectiveStyles = hasYear ? styles : DateTimeStyles.AllowWhiteSpaces;
+
+        // An explicit offset in the text should actually shift the parsed value to true UTC
+        // (e.g. "14:23:05 -04:00" -> 18:23:05 UTC), not just be matched-and-ignored the way it
+        // would be without this flag.
+        if (hasOffset) effectiveStyles |= DateTimeStyles.AdjustToUniversal;
+
+        // BUG FIX (found via the generated-data simulation harness - tests/LogAggregator.
+        // SampleData/LogAggregator.Tests - "iso8601-z"/"iso8601-z-frac" cases): a "K"-bearing
+        // format with no explicit "zzz" (i.e. an ISO-8601 "...THH:mm:ssK" style format, whose
+        // offset is either "Z" or absent) needs DateTimeStyles.RoundtripKind here. Without it,
+        // .NET's documented behavior for "K" + a "Z"-suffixed string is to convert the parsed
+        // value into the LOCAL MACHINE'S time zone and report Kind=Local - and the
+        // DateTime.SpecifyKind(..., Utc) call below only relabels the result, it doesn't
+        // convert it back. On a UTC-5 machine, "2026-02-23T10:43:50Z" was silently coming out
+        // as 2026-02-23T05:43:50 stamped "Utc" - a 5-hour corruption that would only ever show
+        // up on a machine whose local offset isn't zero, which is exactly why nothing caught
+        // it until synthetic data with known-correct expected values was run through this. With
+        // RoundtripKind, .NET instead keeps "Z" as true UTC (Kind=Utc, no shift) and would keep
+        // a genuinely offset-less value as Unspecified (harmless - still relabeled Utc below).
+        if (format.Contains('K', StringComparison.Ordinal)) effectiveStyles |= DateTimeStyles.RoundtripKind;
+
+        if (DateTime.TryParseExact(candidate, format, CultureInfo.InvariantCulture, effectiveStyles, out var parsed))
         {
             utcResult = DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
             return true;
@@ -572,6 +805,52 @@ public static class TimestampDetector
 
         utcResult = DateTime.MinValue;
         return false;
+    }
+
+    /// <summary>
+    /// Parses <paramref name="text"/> against a .NET-style custom format string using NodaTime's
+    /// LocalDateTimePattern. NodaTime's custom pattern letters (y/M/d/H/h/m/s/f/tt) match the
+    /// same dialect CandidateFormats already uses, so the great majority of those format strings
+    /// work here completely unmodified - no per-format translation needed.
+    ///
+    /// The real difference from DateTime.TryParseExact is TemplateValue: NodaTime refuses to
+    /// guess anything a pattern doesn't explicitly specify, so a template supplies "today" (UTC)
+    /// for whatever's missing - the current year for year-less syslog-style formats, and the
+    /// century for 2-digit-year formats - explicitly, rather than DateTime.TryParseExact's
+    /// ambient OS-locale-dependent year windowing (a real, if obscure, source of "silently used
+    /// the wrong century" bugs in the original approach).
+    /// </summary>
+    private static bool TryParseWithNodaTime(string text, string format, out DateTime utcResult)
+    {
+        utcResult = DateTime.MinValue;
+
+        if (!NodaPatternCache.TryGetValue(format, out var basePattern))
+        {
+            try
+            {
+                basePattern = LocalDateTimePattern.CreateWithInvariantCulture(format);
+            }
+            catch (InvalidPatternException)
+            {
+                // A format string NodaTime's (slightly stricter) pattern parser rejects outright
+                // - shouldn't happen for anything in CandidateFormats, but a hand-typed manual
+                // format string in the LogType editor could contain something it's pickier
+                // about. Don't cache the failure (format strings here come from a small fixed
+                // list plus rare manual entries, so the miss is bounded) - just fall through to
+                // the DateTime.TryParseExact fallback in the caller.
+                return false;
+            }
+            NodaPatternCache[format] = basePattern;
+        }
+
+        var now = DateTime.UtcNow;
+        var template = new LocalDateTime(now.Year, now.Month, now.Day, 0, 0, 0);
+        var result = basePattern.WithTemplateValue(template).Parse(text);
+
+        if (!result.Success) return false;
+
+        utcResult = DateTime.SpecifyKind(result.Value.ToDateTimeUnspecified(), DateTimeKind.Utc);
+        return true;
     }
 
     private static int CountTrailingFractionalSpecifier(string format)
@@ -597,9 +876,35 @@ public static class TimestampDetector
         });
     }
 
+    // Matches a trailing signed 4-digit UTC offset with no colon - e.g. the "-0400" in
+    // "2026-08-08 14:23:05 -0400". Anchored to the end of the (already-extracted, already-
+    // trimmed) timestamp text, since the offset is always the last thing in it - see the
+    // LeadingTimestampRegex* candidates, which all capture an optional trailing offset as the
+    // last part of their "ts" group.
+    private static readonly Regex ColonlessTrailingOffsetRegex = new(@"(?<sign>[+-])(?<oh>\d{2})(?<om>\d{2})$", RegexOptions.Compiled);
+
+    /// <summary>Inserts a colon into a trailing signed 4-digit UTC offset with none ("-0400" -&gt;
+    /// "-04:00") - needed because .NET's "zzz" custom format specifier only ever matches a
+    /// colon-separated offset, but plenty of real logs (and this app's own leading-timestamp
+    /// regexes) write it without one. Same normalize-before-parse approach as
+    /// NormalizeFractionalSeconds, just for the offset instead of the fractional digits.
+    /// Text with no trailing offset, or one that already has a colon, passes through
+    /// unchanged.</summary>
+    public static string NormalizeOffset(string text) =>
+        ColonlessTrailingOffsetRegex.Replace(text, m => $"{m.Groups["sign"].Value}{m.Groups["oh"].Value}:{m.Groups["om"].Value}");
+
     private static Regex GetRegex(string pattern)
     {
         if (string.IsNullOrWhiteSpace(pattern)) return LeadingTimestampRegex;
         return UserRegexCache.GetOrAdd(pattern, p => new Regex(p, RegexOptions.Compiled));
     }
+
+    // ===================================================================
+    // Internal: exposed for TimestampTokenizer/TimestampPickerViewModel's "does this chunk
+    // look like a date/time" hints.
+    // ===================================================================
+
+    internal static bool LooksLikeDateOnlyToken(string text) => LooksLikeDateOnly.IsMatch(text);
+    internal static bool LooksLikeTimeOnlyToken(string text) => LooksLikeTimeOnly.IsMatch(text);
+    internal static bool LooksLikeDateTimeToken(string text) => LooksLikeDateTime.IsMatch(text);
 }

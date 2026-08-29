@@ -9,13 +9,18 @@ using LogAggregator.Models;
 namespace LogAggregator.Services;
 
 /// <summary>
-/// Reads all files belonging to a LogSource, detects log-entry (block) boundaries, normalizes
-/// timestamps, and writes rows into SQLite in small batches as it goes. This is the core fix
-/// for the "36 million lines eats all my RAM" problem: at no point does this class hold more
-/// than one batch (~2000 rows) of LogBlocks in memory, regardless of how large the source file
-/// is or how many rows it ultimately produces. Every source syncs on its own Task/
-/// CancellationToken; within a source, files are parsed in parallel (writes are serialized
-/// inside LogDatabase, since SQLite allows one writer at a time - see LogDatabase.cs).
+/// Reads all files belonging to one LogType binding on one Source, detects log-entry (block)
+/// boundaries per that LogType's format, normalizes timestamps per that LogType's timestamp
+/// profile, and writes rows into SQLite in small batches as it goes. This is the core fix for
+/// the "36 million lines eats all my RAM" problem: at no point does this class hold more than
+/// one batch (~2000 rows) of LogBlocks in memory, regardless of how large the source file is or
+/// how many rows it ultimately produces.
+///
+/// Ingestion is scoped to one (Source, LogType) binding rather than a whole Source card, so
+/// dropping a file onto one LogType's chip only re-syncs that binding - a source's other bound
+/// LogTypes keep their already-ingested rows untouched. Within a binding, files still parse in
+/// parallel (writes are serialized inside LogDatabase, since SQLite allows one writer at a time
+/// - see LogDatabase.cs).
 /// </summary>
 public class IngestionService
 {
@@ -38,11 +43,13 @@ public class IngestionService
         _database = database;
     }
 
-    public async Task<SourceIngestionResult> IngestSourceAsync(LogSource source, CancellationToken ct)
+    /// <summary>Ingests one LogType binding's files for one Source. Re-sync replaces this
+    /// binding's previous rows outright, rather than trying to diff which files/lines changed -
+    /// simple and correct, at the cost of a full re-parse.</summary>
+    public async Task<SourceIngestionResult> IngestBindingAsync(
+        LogSource source, LogType logType, SourceLogType binding, CancellationToken ct)
     {
-        // Re-sync replaces this source's previous rows outright, rather than trying to diff
-        // which files/lines changed - simple and correct, at the cost of a full re-parse.
-        _database.DeleteBlocksForSource(source.Id);
+        _database.DeleteBlocksForBinding(source.Id, logType.Id);
 
         var allWarnings = new List<IngestionWarning>();
         var sync = new object();
@@ -53,9 +60,9 @@ public class IngestionService
             MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount)
         };
 
-        await Parallel.ForEachAsync(source.FilePaths, options, async (path, token) =>
+        await Parallel.ForEachAsync(binding.FilePaths, options, async (path, token) =>
         {
-            var fileResult = await IngestFileAsync(path, source, token).ConfigureAwait(false);
+            var fileResult = await IngestFileAsync(path, source, logType, token).ConfigureAwait(false);
             lock (sync)
             {
                 allWarnings.AddRange(fileResult.Warnings);
@@ -64,22 +71,22 @@ public class IngestionService
 
         ct.ThrowIfCancellationRequested();
 
-        var totalCount = _database.CountForSource(source.Id);
+        var totalCount = _database.CountForBinding(source.Id, logType.Id);
         return new SourceIngestionResult { Warnings = allWarnings, TotalCount = totalCount };
     }
 
-    private Task<FileIngestionResult> IngestFileAsync(string path, LogSource source, CancellationToken ct)
+    private Task<FileIngestionResult> IngestFileAsync(string path, LogSource source, LogType logType, CancellationToken ct)
     {
         return Task.Run(() =>
         {
             var info = new FileInfo(path);
             bool streaming = info.Exists && info.Length >= StreamingThresholdBytes;
 
-            return source.Type switch
+            return logType.Format switch
             {
-                FileType.CSV => IngestDelimited(path, source, streaming, ct, delimiter: ','),
-                FileType.TabDelimited => IngestTabDelimited(path, source, streaming, ct),
-                _ => IngestFlatText(path, source, streaming, ct)
+                FileType.CSV => IngestDelimited(path, source, logType, streaming, ct, delimiter: ','),
+                FileType.TabDelimited => IngestTabDelimited(path, source, logType, streaming, ct),
+                _ => IngestFlatText(path, source, logType, streaming, ct)
             };
         }, ct);
     }
@@ -91,11 +98,23 @@ public class IngestionService
         pendingBatch.Clear();
     }
 
+    private static LogBlock NewBlock(LogSource source, LogType logType, string path) => new()
+    {
+        SourceId = source.Id,
+        SourceName = source.Name,
+        SourceColor = source.DisplayColor,
+        LogTypeId = logType.Id,
+        LogTypeName = logType.Name,
+        LogTypeColor = logType.ColorHex,
+        LogTypeIcon = logType.IconGlyph,
+        SourceFilePath = path
+    };
+
     // ===================================================================
     // FlatText: a line starting with a matching timestamp begins a new block;
     // everything else is a continuation of the current block.
     // ===================================================================
-    private FileIngestionResult IngestFlatText(string path, LogSource source, bool streaming, CancellationToken ct)
+    private FileIngestionResult IngestFlatText(string path, LogSource source, LogType logType, bool streaming, CancellationToken ct)
     {
         var result = new FileIngestionResult();
         var pendingBatch = new List<LogBlock>(WriteBatchSize);
@@ -110,17 +129,12 @@ public class IngestionService
         void Flush()
         {
             if (currentLines is null) return;
-            pendingBatch.Add(new LogBlock
-            {
-                UniversalTimestamp = currentUtc,
-                OriginalTimestamp = currentOriginal,
-                SourceId = source.Id,
-                SourceName = source.Name,
-                SourceColor = source.DisplayColor,
-                FullText = string.Join('\n', currentLines),
-                TimestampParseFailed = currentFailed,
-                SourceFilePath = path
-            });
+            var block = NewBlock(source, logType, path);
+            block.UniversalTimestamp = currentUtc;
+            block.OriginalTimestamp = currentOriginal;
+            block.FullText = string.Join('\n', currentLines);
+            block.TimestampParseFailed = currentFailed;
+            pendingBatch.Add(block);
             insertedCount++;
             currentLines = null;
 
@@ -132,7 +146,7 @@ public class IngestionService
             lineIndex++;
             if (lineIndex % CancellationCheckInterval == 0) ct.ThrowIfCancellationRequested();
 
-            var eval = TimestampDetector.EvaluateLine(line, source.TimestampProfile);
+            var eval = TimestampDetector.EvaluateLine(line, logType.TimestampProfile);
             if (eval.Matched)
             {
                 Flush();
@@ -145,10 +159,13 @@ public class IngestionService
                 {
                     result.Warnings.Add(new IngestionWarning
                     {
+                        SourceId = source.Id,
+                        LogTypeId = logType.Id,
                         FilePath = path,
                         LineNumber = (int)lineIndex,
                         RawText = line,
-                        Reason = $"Timestamp-shaped text \"{eval.RawText}\" could not be parsed - block kept with a sentinel timestamp."
+                        Reason = $"Timestamp-shaped text \"{eval.RawText}\" could not be parsed - block kept with a sentinel timestamp.",
+                        RequiresUserAction = true
                     });
                 }
             }
@@ -176,13 +193,25 @@ public class IngestionService
         Flush();
         FlushBatch(pendingBatch);
 
-        if (lineIndex > 0 && insertedCount == 0)
+        // FIX (found via IngestionServiceTests.EmptyFile_* - the generated-data simulation
+        // work turned into direct IngestionService testing): this used to be
+        // "lineIndex > 0 && insertedCount == 0", which meant a genuinely empty (0-line) file -
+        // or one truncated to 0 bytes mid-write, a real "file corruption" symptom - produced
+        // NEITHER a block NOR a warning, silently. That's indistinguishable from "this binding
+        // just doesn't have any files yet" anywhere in the UI. Now it always warns when zero
+        // blocks resulted, with a message that tells the two situations apart.
+        if (insertedCount == 0)
         {
             result.Warnings.Add(new IngestionWarning
             {
+                SourceId = source.Id,
+                LogTypeId = logType.Id,
                 FilePath = path,
                 LineNumber = 0,
-                Reason = "No line in this file matched the configured timestamp pattern - no blocks were created. Check the pattern in the source's wizard."
+                Reason = lineIndex == 0
+                    ? "This file is empty (0 lines) - no blocks were created. If you expected data here, the file may still be being written, or something upstream may have truncated it."
+                    : $"No line in this file matched \"{logType.Name}\"'s configured timestamp pattern - no blocks were created. Check the pattern in the LogTypes window.",
+                RequiresUserAction = true
             });
         }
 
@@ -193,7 +222,7 @@ public class IngestionService
     // CSV: real RFC4180 records (embedded commas/newlines inside quotes are data, not new
     // records or blocks). Each record is its own block.
     // ===================================================================
-    private FileIngestionResult IngestDelimited(string path, LogSource source, bool streaming, CancellationToken ct, char delimiter)
+    private FileIngestionResult IngestDelimited(string path, LogSource source, LogType logType, bool streaming, CancellationToken ct, char delimiter)
     {
         var result = new FileIngestionResult();
         var pendingBatch = new List<LogBlock>(WriteBatchSize);
@@ -209,7 +238,7 @@ public class IngestionService
                 recordIndex++;
                 if (recordIndex % CancellationCheckInterval == 0) ct.ThrowIfCancellationRequested();
 
-                bool parsedOk = TimestampDetector.TryParseColumnTimestamp(fields, source.TimestampProfile, out var utc, out var originalText);
+                bool parsedOk = TimestampDetector.TryParseColumnTimestamp(fields, logType.TimestampProfile, out var utc, out var originalText);
 
                 if (recordIndex == 0 && !parsedOk)
                 {
@@ -222,26 +251,24 @@ public class IngestionService
                     utc = DateTime.MinValue;
                     result.Warnings.Add(new IngestionWarning
                     {
+                        SourceId = source.Id,
+                        LogTypeId = logType.Id,
                         FilePath = path,
                         LineNumber = (int)recordIndex + 1,
                         RawText = string.Join(",", fields),
-                        Reason = $"Could not parse a timestamp from column {source.TimestampProfile.ColumnIndex} - block kept with a sentinel timestamp."
+                        Reason = $"Could not parse a timestamp from column {logType.TimestampProfile.ColumnIndex} - block kept with a sentinel timestamp.",
+                        RequiresUserAction = true
                     });
                 }
 
                 var message = string.Join(" | ", fields);
 
-                pendingBatch.Add(new LogBlock
-                {
-                    UniversalTimestamp = utc,
-                    OriginalTimestamp = originalText,
-                    SourceId = source.Id,
-                    SourceName = source.Name,
-                    SourceColor = source.DisplayColor,
-                    FullText = message,
-                    TimestampParseFailed = !parsedOk,
-                    SourceFilePath = path
-                });
+                var block = NewBlock(source, logType, path);
+                block.UniversalTimestamp = utc;
+                block.OriginalTimestamp = originalText;
+                block.FullText = message;
+                block.TimestampParseFailed = !parsedOk;
+                pendingBatch.Add(block);
                 insertedCount++;
 
                 if (pendingBatch.Count >= WriteBatchSize) FlushBatch(pendingBatch);
@@ -254,13 +281,21 @@ public class IngestionService
 
         FlushBatch(pendingBatch);
 
-        if (recordIndex >= 0 && insertedCount == 0)
+        // See the matching comment in IngestFlatText above - this used to require
+        // "recordIndex >= 0" (at least one record read at all), so a genuinely empty CSV file
+        // produced no warning either. Now it always warns when zero blocks resulted.
+        if (insertedCount == 0)
         {
             result.Warnings.Add(new IngestionWarning
             {
+                SourceId = source.Id,
+                LogTypeId = logType.Id,
                 FilePath = path,
                 LineNumber = 0,
-                Reason = "No record in this file produced a parseable timestamp - no blocks were created."
+                Reason = recordIndex < 0
+                    ? "This file is empty (0 records) - no blocks were created. If you expected data here, the file may still be being written, or something upstream may have truncated it."
+                    : "No record in this file produced a parseable timestamp - no blocks were created.",
+                RequiresUserAction = true
             });
         }
 
@@ -271,7 +306,7 @@ public class IngestionService
     // Tab-delimited: a physical line containing at least one tab is treated as a record; a
     // line with no tabs is a continuation of the previous record (wrapped text).
     // ===================================================================
-    private FileIngestionResult IngestTabDelimited(string path, LogSource source, bool streaming, CancellationToken ct)
+    private FileIngestionResult IngestTabDelimited(string path, LogSource source, LogType logType, bool streaming, CancellationToken ct)
     {
         var result = new FileIngestionResult();
         var pendingBatch = new List<LogBlock>(WriteBatchSize);
@@ -286,17 +321,12 @@ public class IngestionService
         void Flush()
         {
             if (currentLines is null) return;
-            pendingBatch.Add(new LogBlock
-            {
-                UniversalTimestamp = currentUtc,
-                OriginalTimestamp = currentOriginal,
-                SourceId = source.Id,
-                SourceName = source.Name,
-                SourceColor = source.DisplayColor,
-                FullText = string.Join('\n', currentLines),
-                TimestampParseFailed = currentFailed,
-                SourceFilePath = path
-            });
+            var block = NewBlock(source, logType, path);
+            block.UniversalTimestamp = currentUtc;
+            block.OriginalTimestamp = currentOriginal;
+            block.FullText = string.Join('\n', currentLines);
+            block.TimestampParseFailed = currentFailed;
+            pendingBatch.Add(block);
             insertedCount++;
             currentLines = null;
 
@@ -315,7 +345,7 @@ public class IngestionService
                 return;
             }
 
-            bool parsedOk = TimestampDetector.TryParseColumnTimestamp(fields, source.TimestampProfile, out var utc, out var originalText);
+            bool parsedOk = TimestampDetector.TryParseColumnTimestamp(fields, logType.TimestampProfile, out var utc, out var originalText);
 
             if (lineIndex == 0 && !parsedOk)
                 return; // header row
@@ -330,10 +360,13 @@ public class IngestionService
             {
                 result.Warnings.Add(new IngestionWarning
                 {
+                    SourceId = source.Id,
+                    LogTypeId = logType.Id,
                     FilePath = path,
                     LineNumber = (int)lineIndex + 1,
                     RawText = line,
-                    Reason = $"Could not parse a timestamp from column {source.TimestampProfile.ColumnIndex} - block kept with a sentinel timestamp."
+                    Reason = $"Could not parse a timestamp from column {logType.TimestampProfile.ColumnIndex} - block kept with a sentinel timestamp.",
+                    RequiresUserAction = true
                 });
             }
         }
@@ -354,13 +387,19 @@ public class IngestionService
         Flush();
         FlushBatch(pendingBatch);
 
-        if (lineIndex >= 0 && insertedCount == 0)
+        // Same fix as IngestFlatText/IngestDelimited above.
+        if (insertedCount == 0)
         {
             result.Warnings.Add(new IngestionWarning
             {
+                SourceId = source.Id,
+                LogTypeId = logType.Id,
                 FilePath = path,
                 LineNumber = 0,
-                Reason = "No line in this file matched the configured timestamp column - no blocks were created."
+                Reason = lineIndex < 0
+                    ? "This file is empty (0 lines) - no blocks were created. If you expected data here, the file may still be being written, or something upstream may have truncated it."
+                    : "No line in this file matched the configured timestamp column - no blocks were created.",
+                RequiresUserAction = true
             });
         }
 

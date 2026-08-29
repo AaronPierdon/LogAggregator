@@ -12,26 +12,25 @@ using Microsoft.Win32;
 namespace LogAggregator.ViewModels;
 
 /// <summary>
-/// Drives the 4-step new/edit source wizard:
-///   0. Files (drag &amp; drop or browse)  1. Auto-detected timestamp pattern (+ manual override
-///   if needed)  2. Name  3. Display color
-/// File type (CSV/Tab/FlatText) and the timestamp pattern are both detected automatically from
-/// the real files the user picked - nothing is ever pasted by hand. If detection is genuinely
-/// ambiguous (more than one place in the file looks like a timestamp), the user is asked to
-/// pick which one; manual entry only appears if detection fails outright.
+/// Drives the 4-step Add/Edit LogType editor - the evolution of the old per-Source wizard, now
+/// scoped to "how do I parse this kind of log" instead of a Source (Sources no longer own a file
+/// format or timestamp pattern themselves - see LogSource.cs/LogType.cs):
+///   0. Sample files (for testing detection only - not persisted; LogTypes have no files of
+///      their own, files live on each Source's binding)
+///   1. Auto-detected timestamp pattern, with the interactive region picker (see
+///      TimestampPickerViewModel) as the fallback when detection is ambiguous/failed, plus a
+///      manual regex/column override for delimited types
+///   2. Name
+///   3. Color + icon + display mode
 /// </summary>
-public class WizardViewModel : ObservableObject
+public class LogTypeEditorViewModel : ObservableObject
 {
-    public static readonly string[] PresetColors =
-    {
-        "#3DDC97", "#4C9BFF", "#E0A63D", "#E05C5C", "#B57DE0",
-        "#3DC8E0", "#E0733D", "#7DE07E", "#E03D9C", "#9BA8E0"
-    };
+    public static string[] PresetColors => ColorPresets.Colors;
 
     private const int SampleLineCount = 30;
 
-    private readonly string _sourceId;
-    private readonly List<string> _filePaths;
+    private readonly string _logTypeId;
+    private readonly List<string> _sampleFilePaths = new();
     private List<string> _sampleLines = new();
 
     private int _stepIndex;
@@ -50,14 +49,24 @@ public class WizardViewModel : ObservableObject
     private string _manualTestMessage = string.Empty;
     private bool _manualTestIsSuccess;
     private string _selectedColorHex;
+    private string _selectedIconGlyph;
+    private LogTypeDisplayMode _displayMode;
+    private TimestampProfile _currentProfile = new();
+    private TimestampPickerViewModel? _timestampPicker;
     private string _toastMessage = string.Empty;
     private bool _toastVisible;
 
     public bool IsEditMode { get; }
-    public TimestampProfile CurrentProfile { get; private set; } = new();
+    public TimestampProfile CurrentProfile
+    {
+        get => _currentProfile;
+        private set => SetProperty(ref _currentProfile, value);
+    }
+
     public ObservableCollection<string> PendingFilePaths { get; } = new();
     public ObservableCollection<TimestampCandidate> Candidates { get; } = new();
     public IReadOnlyList<string> Presets => PresetColors;
+    public IReadOnlyList<(string Glyph, string Label)> IconChoices => LogType.IconChoices;
 
     public int StepIndex
     {
@@ -108,6 +117,7 @@ public class WizardViewModel : ObservableObject
                 OnPropertyChanged(nameof(IsConfident));
                 OnPropertyChanged(nameof(IsAmbiguous));
                 OnPropertyChanged(nameof(IsFailed));
+                OnPropertyChanged(nameof(ShowTimestampPicker));
             }
         }
     }
@@ -137,15 +147,39 @@ public class WizardViewModel : ObservableObject
 
     public bool IsDelimitedType => DetectedFileType != FileType.FlatText;
 
-    /// <summary>"Timestamp column" for single-column mode, or "Date column" once two-column
-    /// mode is checked - never just a bare "column index" per the user's request.</summary>
+    /// <summary>The interactive region picker - only meaningful for FlatText LogTypes, and only
+    /// shown once detection has actually failed (or the user opts into "pick manually" on an
+    /// ambiguous FlatText result). Delimited types keep the existing column-index override,
+    /// since "which column" is already a simple, unambiguous choice there.</summary>
+    public TimestampPickerViewModel? TimestampPicker
+    {
+        get => _timestampPicker;
+        private set => SetProperty(ref _timestampPicker, value);
+    }
+
+    /// <summary>Was IsFailed || (IsAmbiguous && ShowManualOverride) - i.e. ShowManualOverride
+    /// only mattered when detection was Ambiguous, because the only UI that ever set it true was
+    /// the "I'll pick it myself" button, which XAML only shows in the Ambiguous case. Broadened
+    /// to just IsFailed || ShowManualOverride so a chip's right-click "Set Timestamp Pattern..."
+    /// (which forces ShowManualOverride true unconditionally - see the constructor) also opens
+    /// the picker when detection against this binding's real files comes back Confident, which
+    /// is the common case: the binding already has working files, the user just wants to point
+    /// at a different chunk of the line than what auto-detect picked. Behaviorally identical to
+    /// before for every path that doesn't force it - RunDetection() still explicitly resets
+    /// ShowManualOverride to false on Confident, so nothing here opens the picker on its own.</summary>
+    public bool ShowTimestampPicker => !IsDelimitedType && (IsFailed || ShowManualOverride);
+
     public string PrimaryColumnLabel => UseTwoColumnMode ? "Date column (0-based)" : "Timestamp column (0-based)";
     public string SecondColumnLabel => "Time column (0-based)";
 
     public bool ShowManualOverride
     {
         get => _showManualOverride;
-        set => SetProperty(ref _showManualOverride, value);
+        set
+        {
+            if (SetProperty(ref _showManualOverride, value))
+                OnPropertyChanged(nameof(ShowTimestampPicker));
+        }
     }
 
     public string ManualFormatString { get => _manualFormatString; set => SetProperty(ref _manualFormatString, value); }
@@ -159,9 +193,7 @@ public class WizardViewModel : ObservableObject
         set
         {
             if (SetProperty(ref _useTwoColumnMode, value))
-            {
                 OnPropertyChanged(nameof(PrimaryColumnLabel));
-            }
         }
     }
 
@@ -172,6 +204,18 @@ public class WizardViewModel : ObservableObject
     {
         get => _selectedColorHex;
         set => SetProperty(ref _selectedColorHex, value);
+    }
+
+    public string SelectedIconGlyph
+    {
+        get => _selectedIconGlyph;
+        set => SetProperty(ref _selectedIconGlyph, value);
+    }
+
+    public LogTypeDisplayMode DisplayMode
+    {
+        get => _displayMode;
+        set => SetProperty(ref _displayMode, value);
     }
 
     public string ToastMessage { get => _toastMessage; set => SetProperty(ref _toastMessage, value); }
@@ -185,19 +229,32 @@ public class WizardViewModel : ObservableObject
     public ICommand BrowseFilesCommand { get; }
     public ICommand RemoveFileCommand { get; }
     public ICommand PickPresetColorCommand { get; }
+    public ICommand PickIconCommand { get; }
+    public ICommand ShowRegionPickerCommand { get; }
 
     /// <summary>True = user finished; false = user cancelled.</summary>
     public event Action<bool>? RequestClose;
 
-    public WizardViewModel(LogSource? existing)
+    /// <summary>
+    /// </summary>
+    /// <param name="existing">Null to create a new LogType; non-null to edit one in place.</param>
+    /// <param name="initialSampleFiles">Pre-seeds the "sample files" step - used by the
+    /// quick-create flow from a Source card's drop popup, so the file(s) the user just dropped
+    /// become the sample data immediately instead of asking them to browse again. When
+    /// provided, detection runs immediately and the editor opens straight on step 1.</param>
+    /// <param name="forceManualPatternStep">When true (and <paramref name="initialSampleFiles"/>
+    /// produced at least one usable sample line), forces the manual timestamp picker open right
+    /// after detection - used by a chip's right-click "Set Timestamp Pattern..." so the user
+    /// lands straight on the picker instead of whatever DetectionStatus happened to come back.</param>
+    public LogTypeEditorViewModel(LogType? existing, IEnumerable<string>? initialSampleFiles = null, bool forceManualPatternStep = false)
     {
         IsEditMode = existing is not null;
-        _sourceId = existing?.Id ?? Guid.NewGuid().ToString();
+        _logTypeId = existing?.Id ?? Guid.NewGuid().ToString();
         _name = existing?.Name ?? string.Empty;
-        _detectedFileType = existing?.Type ?? FileType.FlatText;
-        _selectedColorHex = existing?.DisplayColor ?? PresetColors[ColorRotation.NextColorIndex()];
-        _filePaths = existing is not null ? new List<string>(existing.FilePaths) : new List<string>();
-        foreach (var p in _filePaths) PendingFilePaths.Add(p);
+        _detectedFileType = existing?.Format ?? FileType.FlatText;
+        _selectedColorHex = existing?.ColorHex ?? ColorPresets.NextColor();
+        _selectedIconGlyph = existing?.IconGlyph ?? LogType.IconChoices[0].Glyph;
+        _displayMode = existing?.DisplayMode ?? LogTypeDisplayMode.Both;
 
         if (existing is not null)
         {
@@ -215,7 +272,7 @@ public class WizardViewModel : ObservableObject
         {
             if (param is string path)
             {
-                _filePaths.Remove(path);
+                _sampleFilePaths.Remove(path);
                 PendingFilePaths.Remove(path);
             }
         });
@@ -223,6 +280,22 @@ public class WizardViewModel : ObservableObject
         {
             if (param is string hex) SelectedColorHex = hex;
         });
+        PickIconCommand = new RelayCommand(param =>
+        {
+            if (param is string glyph) SelectedIconGlyph = glyph;
+        });
+        ShowRegionPickerCommand = new RelayCommand(() => ShowManualOverride = true);
+
+        if (initialSampleFiles is not null)
+        {
+            AddFiles(initialSampleFiles);
+            if (_sampleFilePaths.Count > 0)
+            {
+                RunDetection();
+                StepIndex = 1;
+                if (forceManualPatternStep) ShowManualOverride = true;
+            }
+        }
     }
 
     // ===================================================================
@@ -233,9 +306,9 @@ public class WizardViewModel : ObservableObject
     {
         if (StepIndex == 0)
         {
-            if (_filePaths.Count == 0)
+            if (_sampleFilePaths.Count == 0)
             {
-                ShowToast("Add at least one file before continuing.");
+                ShowToast("Add at least one sample file before continuing - it's only used to test detection, not saved.");
                 return;
             }
 
@@ -247,14 +320,14 @@ public class WizardViewModel : ObservableObject
         if (StepIndex == 1 && !_hasValidProfile)
         {
             ShowToast(IsAmbiguous
-                ? "Pick which column is the timestamp before continuing."
-                : "Enter and test a manual pattern before continuing.");
+                ? "Pick which part is the timestamp before continuing."
+                : "Select and confirm the timestamp chunks (or enter a manual pattern) before continuing.");
             return;
         }
 
         if (StepIndex == 2 && string.IsNullOrWhiteSpace(Name))
         {
-            ShowToast("Enter a name for this source before continuing.");
+            ShowToast("Enter a name for this LogType before continuing.");
             return;
         }
 
@@ -262,14 +335,14 @@ public class WizardViewModel : ObservableObject
     }
 
     // ===================================================================
-    // Files (drag & drop + browse)
+    // Sample files (test data only - never persisted onto the LogType)
     // ===================================================================
 
     private void BrowseFiles()
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Select log files",
+            Title = "Select sample log file(s) to test detection against",
             Multiselect = true,
             Filter = "All supported files (*.csv;*.txt;*.log;*.tsv;*.zip)|*.csv;*.txt;*.log;*.tsv;*.zip|All files (*.*)|*.*"
         };
@@ -278,8 +351,8 @@ public class WizardViewModel : ObservableObject
             AddFiles(dialog.FileNames);
     }
 
-    /// <summary>Adds files (or expands a dropped .zip into its contents) to the pending list.
-    /// Called both by the Browse dialog and by drag &amp; drop.</summary>
+    /// <summary>Adds files (or expands a dropped .zip into its contents) to the pending sample
+    /// list. Called both by the Browse dialog and by drag &amp; drop.</summary>
     public void AddFiles(IEnumerable<string> paths)
     {
         var expanded = FileDropHelper.ExpandDroppedPaths(paths, ShowToast);
@@ -287,15 +360,15 @@ public class WizardViewModel : ObservableObject
 
         foreach (var path in expanded)
         {
-            if (!_filePaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+            if (!_sampleFilePaths.Contains(path, StringComparer.OrdinalIgnoreCase))
             {
-                _filePaths.Add(path);
+                _sampleFilePaths.Add(path);
                 PendingFilePaths.Add(path);
                 added++;
             }
         }
 
-        if (added > 0) ShowToast($"{added} file(s) added ({_filePaths.Count} total).");
+        if (added > 0) ShowToast($"{added} sample file(s) added ({_sampleFilePaths.Count} total).");
     }
 
     // ===================================================================
@@ -304,7 +377,7 @@ public class WizardViewModel : ObservableObject
 
     private void RunDetection()
     {
-        var firstFile = _filePaths.First();
+        var firstFile = _sampleFilePaths.First();
         _sampleLines = FileTypeDetector.ReadSampleLines(firstFile, SampleLineCount);
         DetectedFileType = FileTypeDetector.DetectFromLines(_sampleLines);
 
@@ -316,6 +389,20 @@ public class WizardViewModel : ObservableObject
 
         Candidates.Clear();
         foreach (var c in result.Candidates) Candidates.Add(c);
+
+        TimestampPicker = !IsDelimitedType ? new TimestampPickerViewModel(_sampleLines, DetectedFileType) : null;
+        if (TimestampPicker is not null)
+        {
+            TimestampPicker.Applied += success =>
+            {
+                if (success && TimestampPicker.ResultProfile is not null)
+                {
+                    CurrentProfile = TimestampPicker.ResultProfile;
+                    _hasValidProfile = true;
+                    ShowToast("Timestamp selection applied.");
+                }
+            };
+        }
 
         switch (result.Status)
         {
@@ -337,6 +424,8 @@ public class WizardViewModel : ObservableObject
                 ShowManualOverride = true;
                 break;
         }
+
+        OnPropertyChanged(nameof(ShowTimestampPicker));
 
         // Suggest a name from the first file, but only if the user hasn't typed one yet.
         if (string.IsNullOrWhiteSpace(Name))
@@ -391,25 +480,17 @@ public class WizardViewModel : ObservableObject
         ToastVisible = true;
     }
 
-    public LogSource BuildResult()
+    public LogType BuildResult()
     {
-        return new LogSource
+        return new LogType
         {
-            Id = _sourceId,
+            Id = _logTypeId,
             Name = Name.Trim(),
-            Type = DetectedFileType,
+            Format = DetectedFileType,
             TimestampProfile = CurrentProfile,
-            DisplayColor = SelectedColorHex,
-            FilePaths = new List<string>(_filePaths),
-            IsActive = true
+            ColorHex = SelectedColorHex,
+            IconGlyph = SelectedIconGlyph,
+            DisplayMode = DisplayMode
         };
-    }
-
-    /// <summary>Tiny helper so successive "new source" wizards default to different preset
-    /// colors instead of always starting green.</summary>
-    private static class ColorRotation
-    {
-        private static int _counter = -1;
-        public static int NextColorIndex() => System.Threading.Interlocked.Increment(ref _counter) % PresetColors.Length;
     }
 }

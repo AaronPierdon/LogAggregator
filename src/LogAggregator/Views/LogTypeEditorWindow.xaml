@@ -1,12 +1,13 @@
-<Window x:Class="LogAggregator.Views.WizardWindow"
+<Window x:Class="LogAggregator.Views.LogTypeEditorWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:conv="clr-namespace:LogAggregator.Converters"
         xmlns:models="clr-namespace:LogAggregator.Models"
+        xmlns:views="clr-namespace:LogAggregator.Views"
         Style="{StaticResource Style.BaseWindow}"
-        Title="Data Source"
-        Width="640" Height="700" MinWidth="580" MinHeight="580"
+        Title="Log Type"
+        Width="680" Height="740" MinWidth="600" MinHeight="600"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
         WindowStyle="None" AllowsTransparency="False"
         Background="{StaticResource Brush.Background}"
@@ -52,6 +53,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="Style.IconPickerButton" TargetType="Button">
+            <Setter Property="Width" Value="38"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Margin" Value="0,0,8,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Foreground" Value="{StaticResource Brush.TextPrimary}"/>
+            <Setter Property="Background" Value="{StaticResource Brush.SurfaceBase}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="6"
+                                BorderThickness="1.4" BorderBrush="{StaticResource Brush.Border}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="BorderBrush" Value="{StaticResource Brush.AccentBlue}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -73,10 +100,10 @@
                            Foreground="{StaticResource Brush.TextSecondary}">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
-                            <Setter Property="Text" Value="New Data Source"/>
+                            <Setter Property="Text" Value="New Log Type"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsEditMode}" Value="True">
-                                    <Setter Property="Text" Value="Edit Data Source"/>
+                                    <Setter Property="Text" Value="Edit Log Type"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -121,7 +148,7 @@
             <!-- Step content -->
             <Grid Grid.Row="1">
 
-                <!-- Step 0: Files -->
+                <!-- Step 0: sample files (test data only) -->
                 <Grid Visibility="{Binding StepIndex, Converter={StaticResource StepVis}, ConverterParameter=0}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -129,8 +156,8 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="Add the file(s) for this source. File type and timestamp pattern are detected automatically."
-                               Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,14" TextWrapping="Wrap"/>
+                    <TextBlock Grid.Row="0" Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,14" TextWrapping="Wrap"
+                               Text="Add a sample file of this log type. It's only used here to detect the file format and timestamp pattern - it isn't saved. Files get attached to Source cards later, by dragging them onto this LogType's icon."/>
 
                     <Border Grid.Row="1" x:Name="FileDropZone" Style="{StaticResource Style.DropZoneBorder}" Height="140" Margin="0,0,0,14"
                             AllowDrop="True" Drop="FileDropZone_Drop" DragEnter="FileDropZone_DragEnter" DragLeave="FileDropZone_DragLeave">
@@ -140,7 +167,7 @@
                                 <Path Width="18" Height="18" Stretch="Uniform" Fill="{StaticResource Brush.AccentGreen}"
                                       Data="M9,0 L11,0 L11,9 L20,9 L20,11 L11,11 L11,20 L9,20 L9,11 L0,11 L0,9 L9,9 Z"/>
                             </Border>
-                            <TextBlock Text="Drag files or a .zip here" Foreground="{StaticResource Brush.TextSecondary}" FontSize="12.5"
+                            <TextBlock Text="Drag a sample file or a .zip here" Foreground="{StaticResource Brush.TextSecondary}" FontSize="12.5"
                                        Margin="0,10,0,4" HorizontalAlignment="Center"/>
                             <Button Content="or Browse..." Style="{StaticResource Style.SecondaryButton}" FontSize="11.5" Padding="10,4"
                                     Command="{Binding BrowseFilesCommand}" HorizontalAlignment="Center"/>
@@ -234,19 +261,25 @@
                             </ListBox.ItemTemplate>
                         </ListBox>
 
-                        <!-- Confident: optional manual override -->
-                        <Expander Header="Override manually" Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,0"
-                                  IsExpanded="{Binding ShowManualOverride}"
-                                  Visibility="{Binding IsFailed, Converter={StaticResource InverseBoolToVis}}">
-                            <StackPanel Margin="0,10,0,0">
-                                <StackPanel Visibility="{Binding IsDelimitedType, Converter={StaticResource InverseBoolToVis}}">
-                                    <TextBlock Text="Leading regex (must contain a group - either named &quot;ts&quot; or the first group)"
-                                               Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
-                                    <TextBox Style="{StaticResource Style.DarkTextBox}" FontFamily="Consolas" FontSize="11.5"
-                                             Text="{Binding ManualRegexPattern, UpdateSourceTrigger=PropertyChanged}"/>
-                                </StackPanel>
+                        <Button Content="None of these are right - let me pick the timestamp myself" Style="{StaticResource Style.SecondaryButton}"
+                                Command="{Binding ShowRegionPickerCommand}" HorizontalAlignment="Left" Margin="0,0,0,14"
+                                Visibility="{Binding IsAmbiguous, Converter={StaticResource BoolToVis}}"/>
 
-                                <StackPanel Visibility="{Binding IsDelimitedType, Converter={StaticResource BoolToVis}}" Margin="0,8,0,0">
+                        <!-- FlatText fallback: interactive region picker -->
+                        <ContentControl Content="{Binding TimestampPicker}" Visibility="{Binding ShowTimestampPicker, Converter={StaticResource BoolToVis}}">
+                            <ContentControl.ContentTemplate>
+                                <DataTemplate>
+                                    <views:TimestampPickerControl/>
+                                </DataTemplate>
+                            </ContentControl.ContentTemplate>
+                        </ContentControl>
+
+                        <!-- Delimited fallback: column/regex override (the region picker only applies to FlatText) -->
+                        <StackPanel Visibility="{Binding IsDelimitedType, Converter={StaticResource BoolToVis}}">
+                            <Expander Header="Override manually" Foreground="{StaticResource Brush.TextSecondary}"
+                                      IsExpanded="{Binding ShowManualOverride}"
+                                      Visibility="{Binding IsFailed, Converter={StaticResource InverseBoolToVis}}">
+                                <StackPanel Margin="0,10,0,0">
                                     <CheckBox Content="Date and time are in two separate columns" Style="{StaticResource Style.DarkCheckBox}"
                                               IsChecked="{Binding UseTwoColumnMode}" Margin="0,0,0,8"/>
                                     <Grid>
@@ -263,81 +296,27 @@
                                             <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding ManualSecondColumnIndex, UpdateSourceTrigger=PropertyChanged}"/>
                                         </StackPanel>
                                     </Grid>
+                                    <TextBlock Text=".NET format string (optional - leave blank to auto-match common formats)"
+                                               Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,10,0,4" TextWrapping="Wrap"/>
+                                    <TextBox Style="{StaticResource Style.DarkTextBox}" FontFamily="Consolas" FontSize="11.5"
+                                             Text="{Binding ManualFormatString, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <Button Content="Test Manual Pattern" Style="{StaticResource Style.SecondaryButton}"
+                                            Command="{Binding ApplyManualCommand}" HorizontalAlignment="Left" Margin="0,10,0,0"/>
+                                    <Border Margin="0,10,0,0" Padding="8" CornerRadius="5" Visibility="{Binding ManualTestMessage, Converter={StaticResource BoolToVis}}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#1A3DDC97"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ManualTestIsSuccess}" Value="False">
+                                                        <Setter Property="Background" Value="#1AE05C5C"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="{Binding ManualTestMessage}" TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource Brush.TextPrimary}"/>
+                                    </Border>
                                 </StackPanel>
-
-                                <TextBlock Text=".NET format string (optional - leave blank to auto-match common formats)"
-                                           Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,10,0,4" TextWrapping="Wrap"/>
-                                <TextBox Style="{StaticResource Style.DarkTextBox}" FontFamily="Consolas" FontSize="11.5"
-                                         Text="{Binding ManualFormatString, UpdateSourceTrigger=PropertyChanged}"/>
-
-                                <Button Content="Test Manual Pattern" Style="{StaticResource Style.SecondaryButton}"
-                                        Command="{Binding ApplyManualCommand}" HorizontalAlignment="Left" Margin="0,10,0,0"/>
-
-                                <Border Margin="0,10,0,0" Padding="8" CornerRadius="5" Visibility="{Binding ManualTestMessage, Converter={StaticResource BoolToVis}}">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="Background" Value="#1A3DDC97"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding ManualTestIsSuccess}" Value="False">
-                                                    <Setter Property="Background" Value="#1AE05C5C"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <TextBlock Text="{Binding ManualTestMessage}" TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource Brush.TextPrimary}"/>
-                                </Border>
-                            </StackPanel>
-                        </Expander>
-
-                        <!-- Failed: manual entry is the only path forward -->
-                        <StackPanel Visibility="{Binding IsFailed, Converter={StaticResource BoolToVis}}">
-                            <StackPanel Visibility="{Binding IsDelimitedType, Converter={StaticResource InverseBoolToVis}}">
-                                <TextBlock Text="Leading regex (must contain a group - either named &quot;ts&quot; or the first group)"
-                                           Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
-                                <TextBox Style="{StaticResource Style.DarkTextBox}" FontFamily="Consolas" FontSize="11.5"
-                                         Text="{Binding ManualRegexPattern, UpdateSourceTrigger=PropertyChanged}"/>
-                            </StackPanel>
-
-                            <StackPanel Visibility="{Binding IsDelimitedType, Converter={StaticResource BoolToVis}}" Margin="0,8,0,0">
-                                <CheckBox Content="Date and time are in two separate columns" Style="{StaticResource Style.DarkCheckBox}"
-                                          IsChecked="{Binding UseTwoColumnMode}" Margin="0,0,0,8"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,6,0">
-                                        <TextBlock Text="{Binding PrimaryColumnLabel}" Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,0,0,4"/>
-                                        <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding ManualColumnIndex, UpdateSourceTrigger=PropertyChanged}"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Margin="6,0,0,0" Visibility="{Binding UseTwoColumnMode, Converter={StaticResource BoolToVis}}">
-                                        <TextBlock Text="{Binding SecondColumnLabel}" Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,0,0,4"/>
-                                        <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding ManualSecondColumnIndex, UpdateSourceTrigger=PropertyChanged}"/>
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-
-                            <TextBlock Text=".NET format string (optional - leave blank to auto-match common formats)"
-                                       Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,10,0,4" TextWrapping="Wrap"/>
-                            <TextBox Style="{StaticResource Style.DarkTextBox}" FontFamily="Consolas" FontSize="11.5"
-                                     Text="{Binding ManualFormatString, UpdateSourceTrigger=PropertyChanged}"/>
-
-                            <Button Content="Test Manual Pattern" Style="{StaticResource Style.SecondaryButton}"
-                                    Command="{Binding ApplyManualCommand}" HorizontalAlignment="Left" Margin="0,10,0,0"/>
-
-                            <Border Margin="0,10,0,0" Padding="8" CornerRadius="5" Visibility="{Binding ManualTestMessage, Converter={StaticResource BoolToVis}}">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#1A3DDC97"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ManualTestIsSuccess}" Value="False">
-                                                <Setter Property="Background" Value="#1AE05C5C"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                                <TextBlock Text="{Binding ManualTestMessage}" TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource Brush.TextPrimary}"/>
-                            </Border>
+                            </Expander>
                         </StackPanel>
 
                     </StackPanel>
@@ -345,41 +324,71 @@
 
                 <!-- Step 2: Name -->
                 <StackPanel Visibility="{Binding StepIndex, Converter={StaticResource StepVis}, ConverterParameter=2}">
-                    <TextBlock Text="Give this source a friendly name." Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <TextBlock Text="Give this LogType a friendly name (e.g. &quot;Kepware&quot;, &quot;Event Viewer&quot;)." Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,10" TextWrapping="Wrap"/>
                     <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                              FontSize="15" Padding="10,8"/>
-                    <TextBlock Text="Suggested from the file name - feel free to change it." Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,6,0,0"/>
+                    <TextBlock Text="Suggested from the sample file name - feel free to change it." Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,6,0,0"/>
                 </StackPanel>
 
-                <!-- Step 3: Color -->
-                <StackPanel Visibility="{Binding StepIndex, Converter={StaticResource StepVis}, ConverterParameter=3}">
-                    <TextBlock Text="Pick a display color for this source's rows." Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,14" TextWrapping="Wrap"/>
-                    <Border Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left" Margin="0,0,0,16"
-                            BorderThickness="2" BorderBrush="{StaticResource Brush.Border}"
-                            Background="{Binding SelectedColorHex, Converter={StaticResource HexToBrush}}"/>
-                    <ItemsControl ItemsSource="{Binding Presets}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Button Width="34" Height="34" Margin="0,0,10,10" Cursor="Hand"
-                                        Command="{Binding DataContext.PickPresetColorCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                        CommandParameter="{Binding}">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border CornerRadius="17" Background="{Binding Converter={StaticResource HexToBrush}}"
-                                                    BorderThickness="2" BorderBrush="{StaticResource Brush.Border}"/>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                </Button>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock Text="Or enter a hex color:" Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,10,0,4"/>
-                    <TextBox Style="{StaticResource Style.DarkTextBox}" Width="140" HorizontalAlignment="Left"
-                             Text="{Binding SelectedColorHex, UpdateSourceTrigger=PropertyChanged}"/>
-                </StackPanel>
+                <!-- Step 3: Color + icon + display mode -->
+                <ScrollViewer Visibility="{Binding StepIndex, Converter={StaticResource StepVis}, ConverterParameter=3}" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="Pick a color for this LogType." Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                        <ItemsControl ItemsSource="{Binding Presets}" Margin="0,0,0,10">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Width="34" Height="34" Margin="0,0,10,10" Cursor="Hand"
+                                            Command="{Binding DataContext.PickPresetColorCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border CornerRadius="17" Background="{Binding Converter={StaticResource HexToBrush}}"
+                                                        BorderThickness="2" BorderBrush="{StaticResource Brush.Border}"/>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="Or enter a hex color:" Foreground="{StaticResource Brush.TextMuted}" FontSize="11" Margin="0,0,0,4"/>
+                        <TextBox Style="{StaticResource Style.DarkTextBox}" Width="140" HorizontalAlignment="Left"
+                                 Text="{Binding SelectedColorHex, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,16"/>
+
+                        <TextBlock Text="Pick an icon." Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                        <ItemsControl ItemsSource="{Binding IconChoices}" Margin="0,0,0,16">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Style="{StaticResource Style.IconPickerButton}" Content="{Binding Glyph}" ToolTip="{Binding Label}"
+                                            Command="{Binding DataContext.PickIconCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding Glyph}"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="Show this LogType's chips as:" Foreground="{StaticResource Brush.TextSecondary}" Margin="0,0,0,8"/>
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Content="Color only" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,20,0"
+                                         IsChecked="{Binding DisplayMode, Converter={StaticResource EnumToBool}, ConverterParameter=Color}"/>
+                            <RadioButton Content="Icon only" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,20,0"
+                                         IsChecked="{Binding DisplayMode, Converter={StaticResource EnumToBool}, ConverterParameter=Icon}"/>
+                            <RadioButton Content="Both (chip is a bit larger)" Style="{StaticResource Style.DarkRadioButton}"
+                                         IsChecked="{Binding DisplayMode, Converter={StaticResource EnumToBool}, ConverterParameter=Both}"/>
+                        </StackPanel>
+
+                        <Border Width="60" Height="60" CornerRadius="30" HorizontalAlignment="Left" Margin="0,16,0,0"
+                                BorderThickness="2" BorderBrush="{StaticResource Brush.Border}"
+                                Background="{Binding SelectedColorHex, Converter={StaticResource HexToBrush}}">
+                            <TextBlock Text="{Binding SelectedIconGlyph}" FontFamily="Segoe MDL2 Assets" FontSize="22"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF0B0E12"/>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
 
             </Grid>
 
@@ -402,7 +411,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <Button Grid.Column="0" Content="Delete Source" Style="{StaticResource Style.SecondaryButton}"
+                    <Button Grid.Column="0" Content="Delete Log Type" Style="{StaticResource Style.SecondaryButton}"
                             Foreground="{StaticResource Brush.Error}" Click="DeleteButton_Click"
                             Visibility="{Binding IsEditMode, Converter={StaticResource BoolToVis}}"/>
 
