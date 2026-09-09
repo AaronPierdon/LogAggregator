@@ -76,6 +76,8 @@ Parsing itself is layered: each candidate format is tried first through **NodaTi
 
 ## Future Vision
 
+- **Remote sources** — connect to remote servers, network folders, and application endpoints instead of only local files, so ingestion stops requiring someone to manually copy logs to your machine first.
+- **Windows Performance Counters as a source** — pull CPU, memory, disk, and app-specific counters alongside log lines, turning this from a log merger into a lightweight ops dashboard for a server or app you maintain.
 - **Bidirectional grid virtualization** — scrolling back past what's unloaded currently means "Jump to Start," not free scrollback.
 - **Close the CSV/Tab epoch gap** — epoch and no-year timestamps are only auto-detected in flat text today; delimited files need the same fallback.
 - **Config schema migration** instead of "unrecognized version starts fresh."
