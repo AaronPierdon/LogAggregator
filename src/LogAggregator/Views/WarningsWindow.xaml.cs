@@ -12,7 +12,7 @@ namespace LogAggregator.Views;
 ///
 /// Non-modal (Show, not ShowDialog) - unlike the other secondary windows in this app, there's
 /// nothing here to "finish" or "apply"; the user should be able to leave it open, glance back
-/// and forth to the main window, and hit Refresh after fixing something.
+/// and forth to the main window, and hit Refresh after fixing something..
 /// </summary>
 public partial class WarningsWindow : Window
 {
