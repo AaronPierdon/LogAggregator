@@ -1,6 +1,6 @@
 # Log Aggregator
 
-**A dark-themed WPF desktop tool that ingests messy, mismatched log files — CSV, tab-delimited, flat text — and turns them into one filterable, sortable, exportable timeline.** Built for the kind of environment where every device speaks a different dialect: Kepware gateways, PI historians, Windows Event Viewer exports, and whatever else has been dumping `.txt` and `.csv` files into a folder for years.
+**A dark-themed WPF desktop tool that merges messy, mismatched log files — CSV, tab-delimited, flat text — into one filterable, sortable, exportable timeline.** Built for environments where every device speaks a different dialect: Kepware gateways, PI historians, Windows Event Viewer exports, whatever's been dumping `.txt`/`.csv` into a folder for years.
 
 ![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
 ![WPF](https://img.shields.io/badge/UI-WPF-0078D7)
@@ -13,37 +13,28 @@
 
 <!--
   Drop your demo GIF here and it'll show up right on the repo homepage.
-  Recommended: save it as docs/demo.gif (create the docs/ folder if it
-  doesn't exist yet), then this line renders it automatically — no
-  other changes needed.
+  Save it as docs/demo.gif (create the docs/ folder if it doesn't exist) —
+  this line picks it up automatically, no other changes needed.
 -->
 ![Log Aggregator demo](docs/demo.gif)
 
 *GIF coming soon — drag-and-drop ingestion, adaptive timestamp detection, and live filtering across millions of rows, in about 15 seconds.*
 
-Don't have real log files handy for a demo? **Settings → Developer → Generate Mock Log Files** spins up realistic, clearly-labeled synthetic data (`MOCK-`-prefixed server names, RFC 5737 documentation-only IPs) in any of the app's supported formats — clean for a happy-path walkthrough, or deliberately broken for showing off the parse-warning system.
+No real logs handy? **Settings → Developer → Generate Mock Log Files** creates realistic, clearly-labeled synthetic data (`MOCK-` server names, documentation-only IPs) — clean for a walkthrough, or deliberately broken to show off the parse-warning system.
 
 ---
 
-## Description
+## What it does
 
-Log Aggregator solves a specific, annoying problem: you've got log data scattered across multiple sources, none of which agree on a timestamp format, delimiter, or structure — and you need to see it all merged into one sorted, filterable view without your machine running out of memory halfway through.
+You've got log data from multiple sources, none of which agree on timestamp format, delimiter, or structure — and you need it merged into one sorted, filterable view without running out of memory.
 
-- **Ingests three shapes in parallel**: CSV (full RFC4180 quoting, so embedded commas and newlines in a field don't corrupt records), tab-delimited, and flat text.
-- **Detects file type and timestamp pattern automatically** — no manual "pick a format" step. Detection votes across ~30 real sampled lines rather than trusting a single line, and recognizes ~18+ distinct timestamp shapes (ISO-8601, syslog, 12-hour AM/PM, signed UTC offsets, Unix epoch, variable-precision fractional seconds, and more).
-- **Never silently drops a row.** If a timestamp looks right but fails to parse, the row is kept with a sentinel value and flagged in a warnings list — you always know what happened to every line.
-- **Scales to tens of millions of rows** on a SQLite backend instead of holding everything in memory. Ingestion streams straight to disk in batches; the grid is a bounded sliding window fed by paged SQL queries.
-- **Filters with real boolean logic** — OR / AND / EXCLUDE term matching, translated to parameterized SQL, evaluated server-side instead of in a giant C# loop.
+- **Reads three shapes**: CSV (full quoting — embedded commas/newlines don't break records), tab-delimited, and flat text.
+- **Detects format and timestamp pattern automatically.** No manual setup step. Recognizes 18+ timestamp shapes: ISO-8601, syslog, 12-hour, UTC offsets, Unix epoch, and more.
+- **Never silently drops a row.** A timestamp that looks right but fails to parse is kept and flagged, not dropped — you always know what happened to every line.
+- **Scales to tens of millions of rows** on a SQLite backend instead of holding everything in memory.
+- **Filters with real logic** — OR / AND / EXCLUDE terms, run as SQL server-side rather than looped in C#.
 
-## Features
-
-- Drag-and-drop ingestion (files or a `.zip`, auto-extracted) with a live-confidence quick-add path
-- Reusable **LogType** definitions — one "how do I parse this" profile shared across every source that uses it
-- Per-source and per-log-type color coding, with a collapsible source rail
-- Click-to-sort, click-to-filter DataGrid with full-text copy support
-- Streaming export of the current filtered view
-- A built-in **mock log generator** (Settings → Developer) for demos and break/fix testing — invents server names, timestamps, and log content on the fly, dialable from conservative/clean to wild/deliberately-broken
-- Fully custom dark theme, no default WPF chrome anywhere
+Other features: drag-and-drop ingestion (including `.zip`), reusable **LogType** profiles, per-source color coding, click-to-sort/filter grid, streaming export, and a built-in **mock log generator** (Settings → Developer) for demos and break/fix testing.
 
 ## Usage
 
@@ -58,38 +49,39 @@ dotnet run --project src/LogAggregator/LogAggregator.csproj
 
 Or open `LogAggregator.sln` in Visual Studio 2022 (17.8+) and press F5.
 
-**To publish a single self-contained `.exe`:**
+**Single-file `.exe`:**
 
 ```bash
 dotnet publish src/LogAggregator/LogAggregator.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-Output lands at `src/LogAggregator/bin/Release/net8.0-windows/win-x64/publish/LogAggregator.exe` — runs on a clean Windows machine, nothing else to install. See [`PUBLISH.md`](PUBLISH.md) for trimming and size options.
+Lands at `.../bin/Release/net8.0-windows/win-x64/publish/LogAggregator.exe` — runs on a clean Windows machine, nothing else to install. See [`PUBLISH.md`](PUBLISH.md) for trimming/size options.
 
-**Getting started with the app itself:**
+**Using the app:**
 
-1. Drag a log file (or several, or a `.zip`) onto the drop zone. Format and timestamp pattern are detected automatically.
-2. If detection is confident, a new source appears and starts syncing immediately. If it's ambiguous, you're shown every candidate side-by-side instead of a silent guess.
-3. Use the OR / AND / EXCLUDE filter bar to narrow the merged view, sort by clicking any column header, export when you're happy.
-4. No real data on hand? **Settings → Developer** generates mock log files in seconds — pick an output format, how wild the timestamp patterns should get, and whether you want a clean example or a deliberately broken one to poke at the warning system.
+1. Drag a log file (or several, or a `.zip`) onto the drop zone — format and timestamp are detected automatically.
+2. Confident match → the source starts syncing immediately. Ambiguous → every candidate is shown side-by-side instead of a silent guess.
+3. Narrow the merged view with the OR / AND / EXCLUDE filter bar, sort by clicking a column, export when ready.
+4. No real data? **Settings → Developer** generates mock log files in seconds.
 
 ## How it works
 
-The interesting engineering is in `Services/TimestampDetector.cs` and `Services/LogDatabase.cs`:
+*Skip this section unless you're curious about the internals.*
 
-- **Timestamp detection** treats "where is the timestamp" and "what format is it" as two separate, automatic questions. For flat text, a family of leading-position regexes (numeric-first, month-name-first, bracketed, epoch) locate the candidate text; for delimited files, every column is scored against ~20 candidate `.NET` format strings across a sample of real rows, and a column only qualifies if it parses successfully at least 70% of the time.
-- **The SQL backend** exists because holding tens of millions of parsed rows in an `ObservableCollection` is a multi-gigabyte memory problem, not a hypothetical one. Ingestion batches writes to SQLite as it parses; the UI queries a paged, filtered, sorted window instead of holding the full result set.
+**Timestamp detection** treats "where's the timestamp" and "what format is it" as separate questions. Flat text uses leading-position regexes (numeric-first, month-name-first, bracketed, epoch); delimited files score every column against ~20 candidate format strings across sampled rows, qualifying a column only if it parses successfully 70%+ of the time.
+
+Parsing itself is layered: each candidate format is tried first through **NodaTime**, which is explicit about timezone and century assumptions instead of relying on .NET's ambient OS-locale defaults. If NodaTime's stricter parser rejects a format, it falls back automatically to `DateTime.TryParseExact` — so NodaTime only *adds* parsing coverage, it never narrows what the app could already parse before it was introduced.
+
+**The SQL backend** exists because holding tens of millions of parsed rows in memory is a real problem, not a hypothetical one. Ingestion streams to SQLite in batches; the UI queries a paged, filtered, sorted window instead of holding the full result set.
 
 ## Future Vision
 
-Things flagged as deliberate v1 trade-offs, worth revisiting:
-
-- **True bidirectional virtualization** — right now the grid's sliding window only loads more rows going forward as you scroll; jumping back up past what's unloaded means "Jump to Start" rather than free scrollback. A proper bidirectional virtualizing data source is the natural next step.
-- **Close the CSV/Tab epoch gap** — Unix-epoch and no-year timestamp shapes are only auto-detectable in flat text today; the column-based detector needs the same "best effort" fallback the flat-text path already has.
-- **Config schema migration** instead of "unrecognized version starts fresh" — fine for early development, not fine forever.
-- **Live tail mode** — watch an actively-growing log file update in real time instead of only syncing on demand.
-- **Saved filter presets** — bookmark an OR/AND/EXCLUDE combination instead of retyping it every session.
-- **A small library of built-in LogType templates** for common industrial/IT systems, so a new source can start from a known-good profile instead of always running detection from scratch.
+- **Bidirectional grid virtualization** — scrolling back past what's unloaded currently means "Jump to Start," not free scrollback.
+- **Close the CSV/Tab epoch gap** — epoch and no-year timestamps are only auto-detected in flat text today; delimited files need the same fallback.
+- **Config schema migration** instead of "unrecognized version starts fresh."
+- **Live tail mode** for actively-growing files.
+- **Saved filter presets.**
+- **Built-in LogType template library** for common industrial/IT systems.
 
 ## Project Layout
 
@@ -97,18 +89,17 @@ Things flagged as deliberate v1 trade-offs, worth revisiting:
 LogAggregator.sln
 src/LogAggregator/
   App.xaml(.cs)          — entry point, global exception handling
-  Themes/                — dark theme: colors, brushes, custom DataGrid + scrollbar
+  Themes/                — dark theme: colors, brushes, custom controls
   Models/                — LogSource, LogType, LogBlock, TimestampProfile, AppConfig
   Services/
     LogDatabase.cs         SQLite storage, filtered/sorted/paged queries
-    TimestampDetector.cs   the adaptive timestamp detection engine
+    TimestampDetector.cs   adaptive timestamp detection (NodaTime + fallback)
     FileTypeDetector.cs    auto-detects CSV / tab-delimited / flat text
     IngestionService.cs    batched streaming ingestion, parallel per-file parsing
     MockLogGeneratorService.cs   synthetic log file generator (Developer tab)
     ExportService.cs       streams a filtered/sorted query to a flat export file
-  ViewModels/ / Views/   — MVVM, hand-rolled (no third-party MVVM package)
+  ViewModels/ / Views/   — hand-rolled MVVM, no third-party package
   Converters/            — value converters
-samples/                 — real-world sample logs used to design the detection engine
-tests/                   — opt-in simulation harness that stress-tests detection against
-                           generated data (off by default, adds zero weight to a normal build)
+samples/                 — real-world sample logs used to design detection
+tests/                   — opt-in simulation harness (off by default)
 ```
