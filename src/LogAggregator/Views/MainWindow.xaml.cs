@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private readonly Brush _dropZoneHoverBorder;
     private ScrollViewer? _gridScrollViewer;
     private WarningsWindow? _warningsWindow;
+    private SettingsWindow? _settingsWindow;
 
     public MainWindow()
     {
@@ -66,7 +67,19 @@ public partial class MainWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        SettingsPopup.IsOpen = !SettingsPopup.IsOpen;
+        // Single-instance, non-modal, same pattern as OnViewWarningsRequested below - re-clicking
+        // the gear while Settings is already open just brings it to the front instead of piling
+        // up a second window.
+        if (_settingsWindow is not null)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        var settingsViewModel = new SettingsViewModel(_viewModel);
+        _settingsWindow = new SettingsWindow(settingsViewModel) { Owner = this };
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Show();
     }
 
     // ===================================================================

@@ -1,0 +1,239 @@
+<Window x:Class="LogAggregator.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:conv="clr-namespace:LogAggregator.Converters"
+        xmlns:vm="clr-namespace:LogAggregator.ViewModels"
+        d:DataContext="{d:DesignInstance vm:SettingsViewModel}"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        mc:Ignorable="d"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        Style="{StaticResource Style.BaseWindow}"
+        Title="Settings"
+        Width="760" Height="640" MinWidth="620" MinHeight="480"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        WindowStyle="None" AllowsTransparency="False"
+        Background="{StaticResource Brush.Background}"
+        ShowInTaskbar="False">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0"
+                             CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <conv:EnumToBoolConverter x:Key="EnumToBool"/>
+        <conv:BoolToNavBackgroundConverter x:Key="BoolToNavBg"/>
+
+        <!-- Left-nav "tab" - a plain Button rather than a real WPF TabItem, matching the rest of
+             this app's fully-retemplated dark controls instead of fighting TabControl's default
+             light-theme chrome. -->
+        <Style x:Key="Style.SettingsNavButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource Brush.TextPrimary}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource Brush.SurfaceHover}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============================= CUSTOM TITLE BAR ============================= -->
+        <Border Grid.Row="0" Height="34" Background="{StaticResource Brush.SurfaceRaised}"
+                BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1"
+                MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Settings" Margin="12,0,0,0" VerticalAlignment="Center" FontSize="12"
+                           Foreground="{StaticResource Brush.TextSecondary}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Style="{StaticResource Style.CaptionButton}" Content="&#xE921;" Click="Minimize_Click" ToolTip="Minimize"/>
+                    <Button Style="{StaticResource Style.CaptionButton}" Content="&#xE922;" Click="MaximizeRestore_Click" ToolTip="Maximize"/>
+                    <Button Style="{StaticResource Style.CaptionCloseButton}" Content="&#xE8BB;" Click="Close_Click" ToolTip="Close"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ============================= BODY ============================= -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left nav -->
+            <Border Grid.Column="0" Background="{StaticResource Brush.SurfaceBase}"
+                    BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,1,0">
+                <StackPanel Margin="10,16">
+                    <Button Content="Interface" Style="{StaticResource Style.SettingsNavButton}"
+                            Command="{Binding SelectInterfaceTabCommand}"
+                            Background="{Binding IsInterfaceTab, Converter={StaticResource BoolToNavBg}}"
+                            Margin="0,0,0,4"/>
+                    <Button Content="Developer" Style="{StaticResource Style.SettingsNavButton}"
+                            Command="{Binding SelectDeveloperTabCommand}"
+                            Background="{Binding IsDeveloperTab, Converter={StaticResource BoolToNavBg}}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ============================= INTERFACE TAB ============================= -->
+            <Grid Grid.Column="1" Margin="28,24"
+                  Visibility="{Binding IsInterfaceTab, Converter={StaticResource BoolToVis}}">
+                <StackPanel DataContext="{Binding MainViewModel}" MaxWidth="420" VerticalAlignment="Top">
+                    <TextBlock Text="INTERFACE" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,10"/>
+                    <CheckBox Content="Show drag &amp; drop quick-add area" Style="{StaticResource Style.DarkCheckBox}"
+                              IsChecked="{Binding ShowDropZone}"/>
+
+                    <TextBlock Text="LOG LINE COLORING" Style="{StaticResource Style.SectionHeader}" Margin="0,24,0,10"/>
+                    <RadioButton Content="By log type" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,4"
+                                 IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=LogType}"/>
+                    <RadioButton Content="By source" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,4"
+                                 IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=Source}"/>
+                    <RadioButton Content="No coloring" Style="{StaticResource Style.DarkRadioButton}"
+                                 IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=None}"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- ============================= DEVELOPER TAB ============================= -->
+            <Grid Grid.Column="1" Margin="28,24"
+                  Visibility="{Binding IsDeveloperTab, Converter={StaticResource BoolToVis}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel DataContext="{Binding Developer}" MaxWidth="560">
+                        <TextBlock Text="MOCK LOG GENERATOR" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,6"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Brush.TextMuted}" FontSize="11.5" Margin="0,0,0,18">
+                            <Run Text="Writes realistic-looking log files for demos, screenshots, and break/fix testing. Every invented server name is prefixed "/>
+                            <Run Text="MOCK-" FontFamily="Consolas"/>
+                            <Run Text=", and every invented IP address comes from a block IANA reserves specifically for documentation (RFC 5737) - real-looking, never a real or routable address."/>
+                        </TextBlock>
+
+                        <TextBlock Text="OUTPUT FORMAT" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,8"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                            <RadioButton Content="CSV" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,20,0"
+                                         GroupName="OutputFormat"
+                                         IsChecked="{Binding OutputFormat, Converter={StaticResource EnumToBool}, ConverterParameter=CSV}"/>
+                            <RadioButton Content="Tab-delimited" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,20,0"
+                                         GroupName="OutputFormat"
+                                         IsChecked="{Binding OutputFormat, Converter={StaticResource EnumToBool}, ConverterParameter=TabDelimited}"/>
+                            <RadioButton Content="Flat text" Style="{StaticResource Style.DarkRadioButton}"
+                                         GroupName="OutputFormat"
+                                         IsChecked="{Binding OutputFormat, Converter={StaticResource EnumToBool}, ConverterParameter=FlatText}"/>
+                        </StackPanel>
+
+                        <TextBlock Text="TIMESTAMP PATTERNS" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,8"/>
+                        <RadioButton Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,6"
+                                     GroupName="Wildness"
+                                     IsChecked="{Binding Wildness, Converter={StaticResource EnumToBool}, ConverterParameter=Conservative}">
+                            <StackPanel Margin="0,-2,0,0">
+                                <TextBlock Text="Conservative" Foreground="{StaticResource Brush.TextPrimary}" FontSize="12.5"/>
+                                <TextBlock Text="Only the handful of shapes real-world logs use constantly (ISO 8601, syslog, US date)."
+                                           Style="{StaticResource Style.CardSubtext}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,6"
+                                     GroupName="Wildness"
+                                     IsChecked="{Binding Wildness, Converter={StaticResource EnumToBool}, ConverterParameter=Standard}">
+                            <StackPanel Margin="0,-2,0,0">
+                                <TextBlock Text="Standard" Foreground="{StaticResource Brush.TextPrimary}" FontSize="12.5"/>
+                                <TextBlock Text="Everything above, plus UTC offsets, fractional seconds, epoch time, 2-digit years, and more."
+                                           Style="{StaticResource Style.CardSubtext}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,20"
+                                     GroupName="Wildness"
+                                     IsChecked="{Binding Wildness, Converter={StaticResource EnumToBool}, ConverterParameter=Wild}">
+                            <StackPanel Margin="0,-2,0,0">
+                                <TextBlock Text="Wild" Foreground="{StaticResource Brush.TextPrimary}" FontSize="12.5"/>
+                                <TextBlock Text="Adds genuinely unusual shapes (bracketed, compact, reversed, full weekday names) - a few can't be auto-detected on purpose, so you can see the manual pattern step in action."
+                                           Style="{StaticResource Style.CardSubtext}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </RadioButton>
+
+                        <TextBlock Text="USAGE" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,8"/>
+                        <RadioButton Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,6"
+                                     GroupName="UsagePreset"
+                                     IsChecked="{Binding UsagePreset, Converter={StaticResource EnumToBool}, ConverterParameter=SimpleExample}">
+                            <StackPanel Margin="0,-2,0,0">
+                                <TextBlock Text="Simple usage example" Foreground="{StaticResource Brush.TextPrimary}" FontSize="12.5"/>
+                                <TextBlock Text="One consistent, confidently-detected format per file, clean data - a one-drop demo of the happy path."
+                                           Style="{StaticResource Style.CardSubtext}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,20"
+                                     GroupName="UsagePreset"
+                                     IsChecked="{Binding UsagePreset, Converter={StaticResource EnumToBool}, ConverterParameter=BreakFix}">
+                            <StackPanel Margin="0,-2,0,0">
+                                <TextBlock Text="Break/fix testing" Foreground="{StaticResource Brush.TextPrimary}" FontSize="12.5"/>
+                                <TextBlock Text="Mixes timestamp shapes within a file and injects malformed lines, blanks, and stack-trace-style continuations - exercises parse warnings and ambiguous detection."
+                                           Style="{StaticResource Style.CardSubtext}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </RadioButton>
+
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="16"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="FILES TO GENERATE" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,6"/>
+                                <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding FileCountText, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="RECORDS PER FILE" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,6"/>
+                                <TextBox Style="{StaticResource Style.DarkTextBox}" Text="{Binding RecordsPerFileText, UpdateSourceTrigger=PropertyChanged}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="OUTPUT FOLDER" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,6"/>
+                        <Grid Margin="0,0,0,20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" Style="{StaticResource Style.DarkTextBox}" Text="{Binding OutputFolder}"
+                                      IsReadOnly="True" Margin="0,0,8,0"/>
+                            <Button Grid.Column="1" Content="Browse..." Style="{StaticResource Style.SecondaryButton}"
+                                    Command="{Binding BrowseFolderCommand}"/>
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                            <Button Content="Generate Mock Log Files" Style="{StaticResource Style.PrimaryButton}"
+                                    Command="{Binding GenerateCommand}" Margin="0,0,10,0"/>
+                            <Button Content="Open Folder" Style="{StaticResource Style.SecondaryButton}"
+                                    Command="{Binding OpenOutputFolderCommand}"/>
+                        </StackPanel>
+
+                        <Border Style="{StaticResource Style.Card}">
+                            <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" FontSize="12"
+                                       Foreground="{StaticResource Brush.TextSecondary}"/>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

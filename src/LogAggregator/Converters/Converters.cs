@@ -136,6 +136,24 @@ public class CountToVisibilityConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>True -> the app's hover/selected surface brush, False -> transparent. Used for the
+/// Settings window's left-nav "tabs", which are plain Buttons rather than real WPF TabItems (the
+/// same reasoning as the rest of this app's fully-retemplated controls: consistent dark styling
+/// everywhere, no per-control light-theme chrome peeking through).</summary>
+public class BoolToNavBackgroundConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var app = Application.Current;
+        return value is true
+            ? (app.TryFindResource("Brush.SurfaceHover") ?? Brushes.Transparent)
+            : Brushes.Transparent;
+    }
+
+    public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 public class CountToSummaryConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)

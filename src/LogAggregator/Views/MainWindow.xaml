@@ -64,26 +64,6 @@
                     <Button Style="{StaticResource Style.CaptionButton}" Content="&#xE922;" Click="MaximizeRestore_Click" ToolTip="Maximize"/>
                     <Button Style="{StaticResource Style.CaptionCloseButton}" Content="&#xE8BB;" Click="Close_Click" ToolTip="Close"/>
                 </StackPanel>
-
-                <Popup x:Name="SettingsPopup" PlacementTarget="{Binding ElementName=SettingsButton}" Placement="Bottom"
-                       StaysOpen="False" AllowsTransparency="True">
-                    <Border Background="{StaticResource Brush.SurfaceRaised}" BorderBrush="{StaticResource Brush.Border}"
-                            BorderThickness="1" CornerRadius="6" Padding="14" Width="240">
-                        <StackPanel>
-                            <TextBlock Text="INTERFACE" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,8"/>
-                            <CheckBox Content="Show drag &amp; drop quick-add area" Style="{StaticResource Style.DarkCheckBox}"
-                                      IsChecked="{Binding ShowDropZone}"/>
-
-                            <TextBlock Text="LOG LINE COLORING" Style="{StaticResource Style.SectionHeader}" Margin="0,16,0,8"/>
-                            <RadioButton Content="By log type" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,4"
-                                         IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=LogType}"/>
-                            <RadioButton Content="By source" Style="{StaticResource Style.DarkRadioButton}" Margin="0,0,0,4"
-                                         IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=Source}"/>
-                            <RadioButton Content="No coloring" Style="{StaticResource Style.DarkRadioButton}"
-                                         IsChecked="{Binding LogLineColorMode, Converter={StaticResource EnumToBool}, ConverterParameter=None}"/>
-                        </StackPanel>
-                    </Border>
-                </Popup>
             </Grid>
         </Border>
 
